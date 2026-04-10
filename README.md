@@ -84,6 +84,8 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 
 ## 사용 가능한 도구
 
+### LLM 게이트웨이
+
 | 도구 | 설명 |
 |------|------|
 | `quetta_ask` | 질문을 보내면 최적 모델이 자동으로 응답 |
@@ -93,19 +95,167 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 | `quetta_routing_info` | 쿼리가 어떤 모델로 라우팅될지 미리 확인 |
 | `quetta_list_agents` | 등록된 전문 에이전트 목록 조회 |
 | `quetta_run_agent` | 특정 에이전트에게 태스크 위임 |
-| `quetta_remote_connect` | 원격 에이전트 연결 확인 (설치 링크 제공) |
-| `quetta_remote_screenshot` | 원격 PC 화면 캡처 (Claude가 화면을 보고 제어) |
-| `quetta_remote_click` | 원격 PC 마우스 클릭 |
-| `quetta_remote_type` | 원격 PC 텍스트 입력 |
-| `quetta_remote_key` | 원격 PC 단축키 입력 (ctrl+c, alt+tab 등) |
+
+### 원격 PC 제어 (Remote Agent)
+
+| 도구 | 설명 |
+|------|------|
+| `quetta_remote_connect` | 연결된 에이전트 목록 조회 또는 설치 링크 생성 |
+| `quetta_remote_screenshot` | 원격 PC 화면 캡처 (Claude가 화면을 직접 분석) |
+| `quetta_remote_click` | 원격 PC 마우스 클릭 (좌/우/더블클릭) |
+| `quetta_remote_type` | 원격 PC 텍스트 입력 (클립보드 경유) |
+| `quetta_remote_key` | 원격 PC 단축키 입력 (`ctrl+c`, `alt+tab` 등) |
 | `quetta_remote_shell` | 원격 PC 셸 명령어 실행 (GPU 학습, 파일 관리 등) |
+
+### 파일 업로드 & 분석
+
+| 도구 | 설명 |
+|------|------|
 | `quetta_analyze_file` | 파일 업로드 → 유형 자동 감지(medical/signal/document) → RAG 인제스트 → AI 분석 |
 | `quetta_upload_file` | 파일 또는 텍스트를 서버에 업로드 (TUS 프로토콜, 대용량 지원) |
 | `quetta_upload_list` | 업로드된 파일 목록 조회 |
 | `quetta_upload_process` | 업로드된 파일을 RAG 지식베이스에 인제스트 |
 | `quetta_upload_process_all` | 미처리 파일 전체를 RAG에 일괄 인제스트 |
+
+### 버전 관리
+
+| 도구 | 설명 |
+|------|------|
 | `quetta_version` | 현재 버전 및 GitHub 최신 커밋 확인 |
 | `quetta_update` | GitHub 최신 버전으로 자동 업데이트 |
+
+---
+
+## 원격 PC 제어 (Remote Agent)
+
+Claude가 다른 PC(GPU 서버, 개인 컴퓨터 등)를 원격으로 제어할 수 있는 기능입니다.  
+에이전트가 서버로 역방향 WebSocket을 연결하므로 **포트포워딩이나 방화벽 설정이 전혀 필요 없습니다.**
+
+### 아키텍처
+
+```
+[Claude MCP] ──REST──▶ [Quetta Gateway :8701]
+                               │
+                          WebSocket 릴레이
+                               │
+                        [Remote Agent PC]
+                     (역방향 WebSocket 연결)
+```
+
+### 빠른 시작
+
+**1단계: Claude 채팅에서 `/remote-agent` 실행**
+
+```
+/remote-agent
+```
+
+설치 링크가 생성됩니다:
+
+```
+curl -fsSL "https://rag.quetta-soft.com/agent/download?token=...&os=linux" | bash
+```
+
+**2단계: 원격 PC 터미널에서 위 명령어 실행**
+
+설치 스크립트가 자동으로:
+- Python 가상환경 생성 (`~/.quetta-agent/`)
+- 의존성 설치 (websockets, pyautogui, mss, pillow)
+- agent.py 다운로드 및 실행
+
+**3단계: 연결 자동 감지**
+
+Claude가 새 에이전트 연결을 감지하면 자동으로 알림:
+
+```
+✅ 원격 에이전트 연결됨!
+  ID      : abc12345
+  호스트   : my-gpu-server
+  OS      : Linux
+  GPU     : NVIDIA RTX 4090
+  화면제어 : 가능 ✅
+  스크린샷 : 가능 ✅
+```
+
+### 원격 제어 예시
+
+```
+# 화면 보기
+quetta_remote_screenshot(agent_id="abc12345")
+
+# GPU 상태 확인
+quetta_remote_shell(agent_id="abc12345", command="nvidia-smi")
+
+# Python 학습 스크립트 실행
+quetta_remote_shell(agent_id="abc12345", command="python train.py --epochs 100")
+
+# 클릭
+quetta_remote_click(agent_id="abc12345", x=500, y=300)
+
+# 텍스트 입력
+quetta_remote_type(agent_id="abc12345", text="Hello World")
+
+# 단축키
+quetta_remote_key(agent_id="abc12345", key="ctrl+s")
+```
+
+### 에이전트 상태 확인
+
+```
+# 현재 연결된 에이전트 목록
+quetta_remote_connect(action="list")
+
+# 새 설치 링크 생성 (Windows)
+quetta_remote_connect(action="install-link", os="windows")
+```
+
+### 설치 링크 유효시간
+
+- 설치 링크: **24시간** 유효
+- 에이전트 연결: 연결되는 동안 유지, **자동 재연결** (네트워크 단절 시 3~60초 백오프)
+
+### Windows 설치
+
+Windows PC에서는 브라우저로 설치 링크에 접속하거나:
+
+```powershell
+# PowerShell에서
+Invoke-WebRequest "https://rag.quetta-soft.com/agent/download?token=...&os=windows" -OutFile install.bat
+.\install.bat
+```
+
+---
+
+## 파일 분석 파이프라인
+
+대용량 파일을 서버에 올리고 AI가 자동으로 분석하는 파이프라인입니다.
+
+### 파일 유형 자동 감지
+
+| 파일 유형 | 감지 기준 | 처리 방식 |
+|----------|----------|---------|
+| `medical` | 의료 키워드 ≥ 2개 (환자, 진단, ICD, FHIR 등) | 의료 AI 분석 |
+| `signal_data` | EDF/DAT/MAT/HDF5 확장자, ECG/BPM 헤더 등 | 신호 처리 분석 |
+| `document` | 기타 PDF, DOCX, TXT 등 | RAG 인제스트 |
+
+### 사용 예시
+
+```
+# 의료 데이터 분석
+quetta_analyze_file(file_path="/data/patient_records.csv")
+
+# 업로드만
+quetta_upload_file(file_path="/data/report.pdf")
+
+# 업로드된 파일 목록
+quetta_upload_list()
+
+# 특정 파일 RAG 인제스트
+quetta_upload_process(file_id="abc123")
+
+# 미처리 파일 전체 인제스트
+quetta_upload_process_all()
+```
 
 ---
 
@@ -121,5 +271,4 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 | `QUETTA_RAG_URL` | `http://localhost:8400` | RAG API 서버 주소 |
 | `QUETTA_TUSD_TOKEN` | _(없음)_ | tusd X-API-Token (nginx 경유 외부 접근 시) |
 | `QUETTA_RAG_KEY` | `rag-claude-key-2026` | RAG API X-API-Key |
-| `QUETTA_REMOTE_AGENT_URL` | _(없음)_ | 원격 에이전트 주소 (예: `http://GPU_PC_IP:7701`) |
-| `QUETTA_REMOTE_AGENT_TOKEN` | _(없음)_ | 원격 에이전트 인증 토큰 |
+| `QUETTA_REMOTE_AGENT_ID` | _(없음)_ | 기본 원격 에이전트 ID (미지정 시 매번 agent_id 입력) |
