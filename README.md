@@ -63,6 +63,25 @@ bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp
 
 ---
 
+## 업데이트
+
+### Claude 채팅에서 (MCP 도구)
+
+```
+quetta_version  # 현재 버전 및 최신 커밋 확인
+quetta_update   # 자동 업데이트 (재시작 필요)
+```
+
+### 터미널에서
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/update.sh | bash
+```
+
+> 업데이트 후 **Claude Code를 재시작**해야 새 버전이 적용됩니다.
+
+---
+
 ## 사용 가능한 도구
 
 | 도구 | 설명 |
@@ -74,6 +93,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp
 | `quetta_routing_info` | 쿼리가 어떤 모델로 라우팅될지 미리 확인 |
 | `quetta_list_agents` | 등록된 전문 에이전트 목록 조회 |
 | `quetta_run_agent` | 특정 에이전트에게 태스크 위임 |
+| `quetta_version` | 현재 버전 및 GitHub 최신 커밋 확인 |
+| `quetta_update` | GitHub 최신 버전으로 자동 업데이트 |
 
 ---
 

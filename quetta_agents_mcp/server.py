@@ -15,12 +15,15 @@ Tools:
   quetta_routing_info - 요청이 어떤 모델로 라우팅될지 설명
   quetta_list_agents  - 등록된 전문 에이전트 목록
   quetta_run_agent    - 특정 에이전트에게 태스크 위임
+  quetta_version      - 현재 버전 및 GitHub 최신 커밋 확인
+  quetta_update       - GitHub 최신 버전으로 자동 업데이트
 """
 
 import asyncio
 import json
 import logging
 import os
+import subprocess
 import sys
 from typing import Any
 
@@ -35,6 +38,10 @@ from mcp.types import (
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
+
+VERSION          = "0.2.0"
+REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
+REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
 GATEWAY_URL      = os.getenv("QUETTA_GATEWAY_URL",      "http://localhost:8701")
 ORCHESTRATOR_URL = os.getenv("QUETTA_ORCHESTRATOR_URL", "http://localhost:8700")
@@ -117,6 +124,64 @@ def format_response(data: dict) -> str:
         text += "\n\n---\n_[Quetta] " + "  |  ".join(meta_parts) + "_"
 
     return text
+
+
+# ─── Update helpers ───────────────────────────────────────────────────────────
+
+async def _run_update() -> tuple[bool, str]:
+    """
+    Force-reinstall the package via uvx --reinstall.
+    Returns (success, output_text).
+    SSH URL 실패 시 HTTPS로 자동 폴백.
+    """
+    uvx = _find_uvx()
+    if not uvx:
+        return False, "`uvx`를 찾을 수 없습니다. https://docs.astral.sh/uv/ 에서 설치하세요."
+
+    for repo in (REPO_SSH, REPO_HTTPS):
+        cmd = [uvx, "--reinstall", "--from", repo, "quetta-agents-mcp", "--version"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            output = (stdout + stderr).decode().strip()
+            if proc.returncode == 0 or "quetta" in output.lower():
+                return True, output
+        except asyncio.TimeoutError:
+            return False, "업데이트 타임아웃 (120s). 네트워크를 확인하세요."
+        except Exception as e:
+            continue  # try next repo URL
+
+    return False, "SSH/HTTPS 모두 실패. GitHub 접근 권한을 확인하세요."
+
+
+def _find_uvx() -> str | None:
+    """Find uvx binary path."""
+    for candidate in ("uvx", os.path.expanduser("~/.local/bin/uvx"), "/usr/local/bin/uvx"):
+        try:
+            subprocess.run([candidate, "--version"], capture_output=True, check=True)
+            return candidate
+        except Exception:
+            continue
+    return None
+
+
+def _get_latest_remote_version() -> str:
+    """Fetch latest version tag from GitHub API (best-effort)."""
+    try:
+        import urllib.request
+        url = "https://api.github.com/repos/choyunsung/quetta-agents-mcp/commits/master"
+        req = urllib.request.Request(url, headers={"User-Agent": "quetta-agents-mcp"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read())
+            sha = data.get("sha", "")[:7]
+            date = data.get("commit", {}).get("author", {}).get("date", "")[:10]
+            return f"master@{sha} ({date})"
+    except Exception:
+        return "확인 불가"
 
 
 # ─── Tool Definitions ─────────────────────────────────────────────────────────
@@ -283,6 +348,20 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["agent_name", "title"],
             },
+        ),
+        Tool(
+            name="quetta_version",
+            description="현재 설치된 quetta-agents-mcp 버전과 GitHub 최신 커밋을 확인합니다.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="quetta_update",
+            description=(
+                "quetta-agents-mcp를 GitHub 최신 버전으로 업데이트합니다.\n"
+                "uvx --reinstall로 패키지를 재설치합니다.\n"
+                "업데이트 후 Claude Code를 재시작해야 적용됩니다."
+            ),
+            inputSchema={"type": "object", "properties": {}},
         ),
     ]
 
@@ -467,6 +546,47 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result_lines.append("- 타임아웃: 실행 중 (백그라운드 계속 실행)")
 
         return [TextContent(type="text", text="\n".join(result_lines))]
+
+    # ── quetta_version ───────────────────────────────────────────────────────────
+    elif name == "quetta_version":
+        latest = _get_latest_remote_version()
+        uvx = _find_uvx() or "미설치"
+        lines = [
+            "**Quetta Agents MCP 버전 정보**",
+            f"- 현재 버전: `{VERSION}`",
+            f"- GitHub 최신: `{latest}`",
+            f"- uvx 경로: `{uvx}`",
+            f"- Gateway: `{GATEWAY_URL}`",
+            f"- 인증: {'API 키 설정됨' if GATEWAY_API_KEY else '없음 (로컬)'}",
+            "",
+            "업데이트하려면 `quetta_update` 도구를 실행하세요.",
+        ]
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_update ─────────────────────────────────────────────────────────
+    elif name == "quetta_update":
+        lines = ["**Quetta Agents MCP 업데이트 중...**", ""]
+        success, output = await _run_update()
+        if success:
+            lines += [
+                "✅ 업데이트 완료!",
+                "",
+                f"```\n{output}\n```" if output else "",
+                "",
+                "> **Claude Code를 재시작**해야 새 버전이 적용됩니다.",
+            ]
+        else:
+            lines += [
+                "❌ 업데이트 실패",
+                "",
+                f"```\n{output}\n```",
+                "",
+                "수동 업데이트:",
+                "```bash",
+                f'uvx --reinstall --from "{REPO_SSH}" quetta-agents-mcp',
+                "```",
+            ]
+        return [TextContent(type="text", text="\n".join(lines))]
 
     return [TextContent(type="text", text=f"알 수 없는 도구: {name}")]
 
