@@ -8,16 +8,37 @@ Automatically routes queries to the best model:
 - **Complex multi-step** → SCION parallel multi-agent (3× Gemma4 + Claude synthesis)
 - **Simple queries** → Gemma4 (local, free, fast)
 
-## Installation (Claude Code)
+## Installation
 
-Add to `~/.claude/settings.json`:
+### 서버 (SSH 키 등록된 경우)
+
+`~/.claude/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "quetta-agents": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/choyunsung/quetta-agents-mcp", "quetta-agents-mcp"],
+      "args": ["--from", "git+ssh://git@github.com/choyunsung/quetta-agents-mcp", "quetta-agents-mcp"],
+      "env": {
+        "QUETTA_GATEWAY_URL": "http://localhost:8701",
+        "QUETTA_ORCHESTRATOR_URL": "http://localhost:8700",
+        "QUETTA_TIMEOUT": "300",
+        "QUETTA_API_KEY": ""
+      }
+    }
+  }
+}
+```
+
+### 개인 PC (외부 접근)
+
+```json
+{
+  "mcpServers": {
+    "quetta-agents": {
+      "command": "uvx",
+      "args": ["--from", "git+ssh://git@github.com/choyunsung/quetta-agents-mcp", "quetta-agents-mcp"],
       "env": {
         "QUETTA_GATEWAY_URL": "https://rag.quetta-soft.com",
         "QUETTA_ORCHESTRATOR_URL": "https://rag.quetta-soft.com/orchestrator",
@@ -29,7 +50,8 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-> **Local server access** (same machine): omit `QUETTA_API_KEY` and use `http://localhost:8701`.
+> SSH 키가 없는 경우 GitHub Personal Access Token 사용:  
+> `git+https://TOKEN@github.com/choyunsung/quetta-agents-mcp`
 
 ## Tools
 
@@ -49,5 +71,5 @@ Add to `~/.claude/settings.json`:
 |----------|---------|-------------|
 | `QUETTA_GATEWAY_URL` | `http://localhost:8701` | Gateway API URL |
 | `QUETTA_ORCHESTRATOR_URL` | `http://localhost:8700` | Orchestrator URL |
-| `QUETTA_API_KEY` | _(empty)_ | API key for external access |
+| `QUETTA_API_KEY` | _(empty)_ | API key (외부 접근 시 필수) |
 | `QUETTA_TIMEOUT` | `300` | Request timeout (seconds) |
