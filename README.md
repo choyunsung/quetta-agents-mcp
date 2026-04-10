@@ -93,6 +93,10 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 | `quetta_routing_info` | 쿼리가 어떤 모델로 라우팅될지 미리 확인 |
 | `quetta_list_agents` | 등록된 전문 에이전트 목록 조회 |
 | `quetta_run_agent` | 특정 에이전트에게 태스크 위임 |
+| `quetta_upload_file` | 파일 또는 텍스트를 서버에 업로드 (TUS 프로토콜, 대용량 지원) |
+| `quetta_upload_list` | 업로드된 파일 목록 조회 |
+| `quetta_upload_process` | 업로드된 파일을 RAG 지식베이스에 인제스트 |
+| `quetta_upload_process_all` | 미처리 파일 전체를 RAG에 일괄 인제스트 |
 | `quetta_version` | 현재 버전 및 GitHub 최신 커밋 확인 |
 | `quetta_update` | GitHub 최신 버전으로 자동 업데이트 |
 
@@ -106,3 +110,7 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 | `QUETTA_ORCHESTRATOR_URL` | `http://localhost:8700` | 오케스트레이터 주소 |
 | `QUETTA_API_KEY` | _(없음)_ | 외부 접근 시 필요한 API 키 |
 | `QUETTA_TIMEOUT` | `300` | 요청 타임아웃 (초) |
+| `QUETTA_TUSD_URL` | `http://localhost:1080` | tusd 파일 업로드 서버 주소 |
+| `QUETTA_RAG_URL` | `http://localhost:8400` | RAG API 서버 주소 |
+| `QUETTA_TUSD_TOKEN` | _(없음)_ | tusd X-API-Token (nginx 경유 외부 접근 시) |
+| `QUETTA_RAG_KEY` | `rag-claude-key-2026` | RAG API X-API-Key |

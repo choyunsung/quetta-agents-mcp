@@ -8,18 +8,23 @@ Claude 채팅 중 자동으로 최적 모델을 선택해 질문을 처리합니
 - 단순 질문 → Gemma4 (로컬·무료)
 
 Tools:
-  quetta_ask          - 질문을 보내면 최적 모델이 자동으로 응답
-  quetta_code         - 코드 개발 작업 (agent-skills 5종 자동 주입)
-  quetta_medical      - 의료 전문 질의 (DeepSeek-R1 임상 추론)
-  quetta_multi_agent  - 복잡한 멀티스텝 태스크 (SCION 병렬 실행)
-  quetta_routing_info - 요청이 어떤 모델로 라우팅될지 설명
-  quetta_list_agents  - 등록된 전문 에이전트 목록
-  quetta_run_agent    - 특정 에이전트에게 태스크 위임
-  quetta_version      - 현재 버전 및 GitHub 최신 커밋 확인
-  quetta_update       - GitHub 최신 버전으로 자동 업데이트
+  quetta_ask              - 질문을 보내면 최적 모델이 자동으로 응답
+  quetta_code             - 코드 개발 작업 (agent-skills 5종 자동 주입)
+  quetta_medical          - 의료 전문 질의 (DeepSeek-R1 임상 추론)
+  quetta_multi_agent      - 복잡한 멀티스텝 태스크 (SCION 병렬 실행)
+  quetta_routing_info     - 요청이 어떤 모델로 라우팅될지 설명
+  quetta_list_agents      - 등록된 전문 에이전트 목록
+  quetta_run_agent        - 특정 에이전트에게 태스크 위임
+  quetta_upload_file      - 파일 또는 텍스트를 서버에 업로드 (TUS 프로토콜)
+  quetta_upload_list      - 업로드된 파일 목록 조회
+  quetta_upload_process   - 업로드된 파일을 RAG에 인제스트
+  quetta_upload_process_all - 미처리 파일 전체 RAG 인제스트
+  quetta_version          - 현재 버전 및 GitHub 최신 커밋 확인
+  quetta_update           - GitHub 최신 버전으로 자동 업데이트
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -39,7 +44,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.2.0"
+VERSION          = "0.3.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -47,6 +52,12 @@ GATEWAY_URL      = os.getenv("QUETTA_GATEWAY_URL",      "http://localhost:8701")
 ORCHESTRATOR_URL = os.getenv("QUETTA_ORCHESTRATOR_URL", "http://localhost:8700")
 TIMEOUT          = float(os.getenv("QUETTA_TIMEOUT",    "300"))
 GATEWAY_API_KEY  = os.getenv("QUETTA_API_KEY", "")   # Set for external access
+
+# 대용량 파일 업로드 (tusd TUS 프로토콜 + RAG 인제스트)
+TUSD_URL         = os.getenv("QUETTA_TUSD_URL",   "http://localhost:1080")   # tusd
+RAG_URL          = os.getenv("QUETTA_RAG_URL",    "http://localhost:8400")   # RAG API
+TUSD_TOKEN       = os.getenv("QUETTA_TUSD_TOKEN", "")                        # X-API-Token for tusd
+RAG_KEY          = os.getenv("QUETTA_RAG_KEY",    "rag-claude-key-2026")     # X-API-Key for RAG
 
 server = Server("quetta-agents")
 
@@ -58,6 +69,58 @@ def _auth_headers() -> dict:
     if GATEWAY_API_KEY:
         return {"Authorization": f"Bearer {GATEWAY_API_KEY}"}
     return {}
+
+
+def _rag_headers() -> dict:
+    """Return RAG API auth headers."""
+    return {"X-API-Key": RAG_KEY}
+
+
+def _tusd_headers() -> dict:
+    """Return tusd X-API-Token header if set."""
+    if TUSD_TOKEN:
+        return {"X-API-Token": TUSD_TOKEN}
+    return {}
+
+
+async def _tus_upload(filename: str, content: bytes) -> str:
+    """Upload content via TUS protocol to tusd. Returns file ID."""
+    upload_length = len(content)
+    metadata_filename = base64.b64encode(filename.encode()).decode()
+
+    tusd_base = TUSD_URL.rstrip("/")
+
+    create_headers = {
+        "Tus-Resumable": "1.0.0",
+        "Upload-Length": str(upload_length),
+        "Upload-Metadata": f"filename {metadata_filename}",
+        "Content-Length": "0",
+    }
+    create_headers.update(_tusd_headers())
+
+    async with httpx.AsyncClient(timeout=600) as client:
+        # Step 1: Create upload slot
+        resp = await client.post(f"{tusd_base}/files/", headers=create_headers)
+        resp.raise_for_status()
+        location = resp.headers.get("Location", "")
+        if not location:
+            raise ValueError("tusd: Location 헤더가 없습니다")
+
+        # Step 2: Upload content
+        patch_headers = {
+            "Tus-Resumable": "1.0.0",
+            "Content-Type": "application/offset+octet-stream",
+            "Upload-Offset": "0",
+            "Content-Length": str(upload_length),
+        }
+        patch_headers.update(_tusd_headers())
+
+        resp = await client.patch(location, content=content, headers=patch_headers)
+        resp.raise_for_status()
+
+        # Extract file ID from Location URL
+        file_id = location.rstrip("/").split("/")[-1]
+        return file_id
 
 
 async def gateway_chat(
@@ -350,6 +413,113 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="quetta_upload_file",
+            description=(
+                "파일 또는 텍스트를 서버에 업로드합니다 (TUS 프로토콜, 대용량 지원).\n"
+                "업로드 후 `quetta_upload_process`로 RAG에 인제스트할 수 있습니다.\n\n"
+                "입력 방법 (둘 중 하나):\n"
+                "  1. file_path: 서버에 있는 파일 경로\n"
+                "  2. content + filename: 텍스트 내용과 파일명"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "업로드할 파일 경로 (서버 로컬 경로)",
+                        "default": "",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "업로드할 텍스트 내용 (file_path 미지정 시 사용)",
+                        "default": "",
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "저장할 파일명 (content 사용 시 필수)",
+                        "default": "upload.txt",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="quetta_upload_list",
+            description="서버에 업로드된 파일 목록을 조회합니다. 파일 ID, 이름, 크기, 업로드 완료 여부를 확인할 수 있습니다.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="quetta_upload_process",
+            description=(
+                "업로드 완료된 파일을 RAG(지식베이스)에 인제스트합니다.\n"
+                "텍스트 파일은 청크로 분할되어 의미 검색에 활용됩니다.\n\n"
+                "file_id는 `quetta_upload_list`로 확인하세요."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_id": {
+                        "type": "string",
+                        "description": "업로드된 파일 ID (quetta_upload_list로 확인)",
+                    },
+                    "usage_type": {
+                        "type": "string",
+                        "description": "RAG 저장 용도 (measurement_data/project_knowledge/clinical_record/document)",
+                        "default": "measurement_data",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "출처 (프로젝트명 등)",
+                        "default": "",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "태그 목록",
+                        "default": [],
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "description": "텍스트 분할 크기 (500-50000 chars)",
+                        "default": 4000,
+                    },
+                },
+                "required": ["file_id"],
+            },
+        ),
+        Tool(
+            name="quetta_upload_process_all",
+            description=(
+                "업로드 완료된 모든 파일을 RAG(지식베이스)에 인제스트합니다.\n"
+                "미처리 파일을 일괄 처리할 때 사용합니다."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "usage_type": {
+                        "type": "string",
+                        "description": "RAG 저장 용도 (measurement_data/project_knowledge/clinical_record/document)",
+                        "default": "measurement_data",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "출처 (프로젝트명 등)",
+                        "default": "",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "태그 목록",
+                        "default": [],
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "description": "텍스트 분할 크기 (500-50000 chars)",
+                        "default": 4000,
+                    },
+                },
+            },
+        ),
+        Tool(
             name="quetta_version",
             description="현재 설치된 quetta-agents-mcp 버전과 GitHub 최신 커밋을 확인합니다.",
             inputSchema={"type": "object", "properties": {}},
@@ -546,6 +716,118 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result_lines.append("- 타임아웃: 실행 중 (백그라운드 계속 실행)")
 
         return [TextContent(type="text", text="\n".join(result_lines))]
+
+    # ── quetta_upload_file ────────────────────────────────────────────────────
+    elif name == "quetta_upload_file":
+        file_path = arguments.get("file_path", "").strip()
+        content_str = arguments.get("content", "")
+        filename = arguments.get("filename", "upload.txt")
+
+        if file_path:
+            import pathlib
+            p = pathlib.Path(file_path)
+            if not p.exists():
+                return [TextContent(type="text", text=f"파일을 찾을 수 없습니다: `{file_path}`")]
+            raw = p.read_bytes()
+            filename = p.name
+        elif content_str:
+            raw = content_str.encode("utf-8")
+        else:
+            return [TextContent(type="text", text="`file_path` 또는 `content`를 지정하세요.")]
+
+        file_id = await _tus_upload(filename, raw)
+
+        lines = [
+            "**파일 업로드 완료**",
+            f"- 파일명: `{filename}`",
+            f"- 크기: {len(raw):,} bytes",
+            f"- 파일 ID: `{file_id}`",
+            "",
+            f"`quetta_upload_process` 도구로 RAG에 인제스트할 수 있습니다.",
+        ]
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_upload_list ────────────────────────────────────────────────────
+    elif name == "quetta_upload_list":
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{RAG_URL}/upload/files", headers=_rag_headers())
+            resp.raise_for_status()
+            files = resp.json()
+
+        if not files:
+            return [TextContent(type="text", text="업로드된 파일이 없습니다.")]
+
+        lines = [f"**업로드된 파일 목록** ({len(files)}개)\n"]
+        for f in files:
+            size = f.get("size", 0)
+            offset = f.get("offset", 0)
+            complete = f.get("complete", False)
+            status = "완료" if complete else f"진행중 ({offset}/{size})"
+            lines.append(f"- `{f['id']}` — **{f.get('filename') or '(이름없음)'}**")
+            lines.append(f"  크기: {size:,} bytes  |  상태: {status}")
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_upload_process ─────────────────────────────────────────────────
+    elif name == "quetta_upload_process":
+        file_id = arguments["file_id"]
+        body = {
+            "usage_type": arguments.get("usage_type", "measurement_data"),
+            "source": arguments.get("source", ""),
+            "tags": arguments.get("tags", []),
+            "chunk_size": arguments.get("chunk_size", 4000),
+        }
+
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(
+                f"{RAG_URL}/upload/process/{file_id}",
+                json=body,
+                headers=_rag_headers(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        lines = [
+            "**RAG 인제스트 완료**",
+            f"- 파일: `{data.get('filename', file_id)}`",
+            f"- 청크 수: {data.get('chunks_ingested', 0)}개",
+            f"- 처리 시간: {data.get('processing_ms', 0):.0f}ms",
+            f"- 상태: {data.get('status', '?')}",
+        ]
+        if data.get("message"):
+            lines.append(f"- {data['message']}")
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_upload_process_all ─────────────────────────────────────────────
+    elif name == "quetta_upload_process_all":
+        body = {
+            "usage_type": arguments.get("usage_type", "measurement_data"),
+            "source": arguments.get("source", ""),
+            "tags": arguments.get("tags", []),
+            "chunk_size": arguments.get("chunk_size", 4000),
+        }
+
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(
+                f"{RAG_URL}/upload/process-all",
+                json=body,
+                headers=_rag_headers(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        processed = data.get("processed", 0)
+        files = data.get("files", [])
+
+        lines = [f"**전체 파일 인제스트 완료** — {processed}개 처리\n"]
+        for f in files:
+            if "error" in f:
+                lines.append(f"- `{f['file_id']}` — ❌ {f['error']}")
+            else:
+                lines.append(
+                    f"- `{f.get('file_id', '?')}` **{f.get('filename', '')}** "
+                    f"— {f.get('chunks', 0)}청크"
+                )
+        return [TextContent(type="text", text="\n".join(lines))]
 
     # ── quetta_version ───────────────────────────────────────────────────────────
     elif name == "quetta_version":
