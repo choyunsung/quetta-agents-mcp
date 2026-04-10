@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "quetta-agents-mcp"
+version = "0.1.0"
+description = "MCP server for Quetta Agents — smart LLM gateway with auto-routing"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.28.0",
+]
+
+[project.scripts]
+quetta-agents-mcp = "quetta_agents_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quetta_agents_mcp"]
