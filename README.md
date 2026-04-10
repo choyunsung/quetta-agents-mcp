@@ -1,24 +1,28 @@
 # quetta-agents-mcp
 
-Claude MCP server for [Quetta Agents](https://github.com/choyunsung/quetta-agents) — smart LLM gateway with auto-routing.
+[Quetta Agents](https://github.com/choyunsung/quetta-agents) 스마트 LLM 게이트웨이를 Claude에서 바로 사용할 수 있는 MCP 서버.
 
-Automatically routes queries to the best model:
-- **Code tasks** → Gemma4 + agent-skills (plan/build/test/review/security)
-- **Medical queries** → DeepSeek-R1 (clinical/diagnostic) or Claude Opus (imaging)
-- **Complex multi-step** → SCION parallel multi-agent (3× Gemma4 + Claude synthesis)
-- **Simple queries** → Gemma4 (local, free, fast)
+질문 내용을 자동으로 분석해 가장 적합한 모델로 라우팅합니다:
+
+| 질문 유형 | 라우팅 |
+|----------|--------|
+| 코드 개발/리뷰 | Gemma4 + agent-skills 5종 자동 주입 |
+| 의료 임상/진단 | DeepSeek-R1 (로컬, 무료) |
+| 의료 영상 분석 | Claude Opus |
+| 복잡한 멀티스텝 | Gemma4 3개 병렬 실행 → Claude 종합 (SCION) |
+| 일반 질문 | Gemma4 (로컬, 무료, 빠름) |
 
 ---
 
-## Installation
+## 설치
 
-### One-line (recommended)
+### 원클릭 설치 (권장)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh | bash
 ```
 
-With custom gateway and API key:
+게이트웨이 URL과 API 키를 환경변수로 미리 지정할 수 있습니다:
 
 ```bash
 QUETTA_GATEWAY_URL=https://rag.quetta-soft.com \
@@ -26,14 +30,15 @@ QUETTA_API_KEY=your_api_key \
 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
 ```
 
-The script will:
-1. Install `uv` if not present
-2. Add `quetta-agents` to `~/.claude/settings.json`
-3. Prompt for Gateway URL and API key (if not set via env vars)
+설치 스크립트가 자동으로 처리하는 것:
+1. `uv` 미설치 시 자동 설치
+2. GitHub에서 패키지 다운로드 및 검증
+3. `~/.claude/settings.json`에 MCP 서버 설정 추가 (기존 설정 보존)
+4. URL·API 키 대화형 입력 (환경변수 미지정 시)
 
-### Manual
+### 수동 설치
 
-Add to `~/.claude/settings.json`:
+`~/.claude/settings.json`에 직접 추가:
 
 ```json
 {
@@ -44,7 +49,7 @@ Add to `~/.claude/settings.json`:
       "env": {
         "QUETTA_GATEWAY_URL": "https://rag.quetta-soft.com",
         "QUETTA_ORCHESTRATOR_URL": "https://rag.quetta-soft.com/orchestrator",
-        "QUETTA_API_KEY": "YOUR_API_KEY",
+        "QUETTA_API_KEY": "발급받은_API_키",
         "QUETTA_TIMEOUT": "300"
       }
     }
@@ -52,29 +57,31 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-> **Local (same machine):** set `QUETTA_GATEWAY_URL=http://localhost:8701` and leave `QUETTA_API_KEY` empty.
+> **같은 서버에서 로컬 실행 시:** `QUETTA_GATEWAY_URL=http://localhost:8701`로 설정하고 `QUETTA_API_KEY`는 비워두면 됩니다.
+
+설정 후 Claude Code를 재시작하면 적용됩니다.
 
 ---
 
-## Tools
+## 사용 가능한 도구
 
-| Tool | Description |
-|------|-------------|
-| `quetta_ask` | Auto-route query to best model |
-| `quetta_code` | Code task with 5 agent-skills injected |
-| `quetta_medical` | Medical query (DeepSeek-R1 / Claude Opus) |
-| `quetta_multi_agent` | Complex task via parallel SCION agents |
-| `quetta_routing_info` | Preview routing decision for a query |
-| `quetta_list_agents` | List registered specialist agents |
-| `quetta_run_agent` | Delegate task to a specific agent |
+| 도구 | 설명 |
+|------|------|
+| `quetta_ask` | 질문을 보내면 최적 모델이 자동으로 응답 |
+| `quetta_code` | 코드 개발 작업 (agent-skills 5종 자동 주입) |
+| `quetta_medical` | 의료 전문 질의 (DeepSeek-R1 임상 추론) |
+| `quetta_multi_agent` | 복잡한 태스크를 병렬 에이전트로 처리 |
+| `quetta_routing_info` | 쿼리가 어떤 모델로 라우팅될지 미리 확인 |
+| `quetta_list_agents` | 등록된 전문 에이전트 목록 조회 |
+| `quetta_run_agent` | 특정 에이전트에게 태스크 위임 |
 
 ---
 
-## Environment Variables
+## 환경변수
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `QUETTA_GATEWAY_URL` | `http://localhost:8701` | Gateway API URL |
-| `QUETTA_ORCHESTRATOR_URL` | `http://localhost:8700` | Orchestrator URL |
-| `QUETTA_API_KEY` | _(empty)_ | API key (외부 접근 시 필수) |
-| `QUETTA_TIMEOUT` | `300` | Request timeout in seconds |
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `QUETTA_GATEWAY_URL` | `http://localhost:8701` | 게이트웨이 API 주소 |
+| `QUETTA_ORCHESTRATOR_URL` | `http://localhost:8700` | 오케스트레이터 주소 |
+| `QUETTA_API_KEY` | _(없음)_ | 외부 접근 시 필요한 API 키 |
+| `QUETTA_TIMEOUT` | `300` | 요청 타임아웃 (초) |
