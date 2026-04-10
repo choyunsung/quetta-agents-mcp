@@ -93,6 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 | `quetta_routing_info` | 쿼리가 어떤 모델로 라우팅될지 미리 확인 |
 | `quetta_list_agents` | 등록된 전문 에이전트 목록 조회 |
 | `quetta_run_agent` | 특정 에이전트에게 태스크 위임 |
+| `quetta_analyze_file` | 파일 업로드 → 유형 자동 감지(medical/signal/document) → RAG 인제스트 → AI 분석 |
 | `quetta_upload_file` | 파일 또는 텍스트를 서버에 업로드 (TUS 프로토콜, 대용량 지원) |
 | `quetta_upload_list` | 업로드된 파일 목록 조회 |
 | `quetta_upload_process` | 업로드된 파일을 RAG 지식베이스에 인제스트 |

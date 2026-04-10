@@ -15,6 +15,7 @@ Tools:
   quetta_routing_info     - 요청이 어떤 모델로 라우팅될지 설명
   quetta_list_agents      - 등록된 전문 에이전트 목록
   quetta_run_agent        - 특정 에이전트에게 태스크 위임
+  quetta_analyze_file     - 파일 업로드 → 유형 자동 감지 → RAG 인제스트 → AI 분석 (의료/신호/문서)
   quetta_upload_file      - 파일 또는 텍스트를 서버에 업로드 (TUS 프로토콜)
   quetta_upload_list      - 업로드된 파일 목록 조회
   quetta_upload_process   - 업로드된 파일을 RAG에 인제스트
@@ -44,7 +45,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.3.0"
+VERSION          = "0.4.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -413,6 +414,59 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="quetta_analyze_file",
+            description=(
+                "파일을 서버에 업로드하고 유형을 자동 감지한 뒤 AI로 분석합니다.\n\n"
+                "처리 흐름:\n"
+                "  1. 파일 업로드 (TUS 프로토콜 → /storage/uploads/tusd/)\n"
+                "  2. 파일 유형 자동 감지: medical / signal_data / document\n"
+                "  3. RAG 지식베이스에 인제스트 (usage_type 자동 매핑)\n"
+                "  4. 적합한 AI 모델로 분석:\n"
+                "     - medical → DeepSeek-R1 임상 추론\n"
+                "     - signal_data → Gemma4 + 측정 데이터 분석\n"
+                "     - document → Gemma4 + 문서 요약\n\n"
+                "입력 방법:\n"
+                "  - file_path: 서버 로컬 파일 경로\n"
+                "  - content + filename: 텍스트 직접 입력"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "분석할 파일 경로 (서버 로컬 경로)",
+                        "default": "",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "분석할 텍스트 내용 (file_path 미지정 시)",
+                        "default": "",
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "파일명 (content 사용 시 확장자로 유형 감지)",
+                        "default": "upload.txt",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "분석 요청 질문 (없으면 전체 요약)",
+                        "default": "",
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "출처/프로젝트명 (RAG 메타데이터)",
+                        "default": "",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "추가 태그",
+                        "default": [],
+                    },
+                },
+            },
+        ),
+        Tool(
             name="quetta_upload_file",
             description=(
                 "파일 또는 텍스트를 서버에 업로드합니다 (TUS 프로토콜, 대용량 지원).\n"
@@ -716,6 +770,117 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 result_lines.append("- 타임아웃: 실행 중 (백그라운드 계속 실행)")
 
         return [TextContent(type="text", text="\n".join(result_lines))]
+
+    # ── quetta_analyze_file ───────────────────────────────────────────────────
+    elif name == "quetta_analyze_file":
+        file_path_str = arguments.get("file_path", "").strip()
+        content_str   = arguments.get("content", "")
+        filename      = arguments.get("filename", "upload.txt")
+        query         = arguments.get("query", "")
+        source        = arguments.get("source", "")
+        tags          = arguments.get("tags", [])
+
+        # 1. 파일 읽기
+        if file_path_str:
+            import pathlib
+            p = pathlib.Path(file_path_str)
+            if not p.exists():
+                return [TextContent(type="text", text=f"파일을 찾을 수 없습니다: `{file_path_str}`")]
+            raw = p.read_bytes()
+            filename = p.name
+        elif content_str:
+            raw = content_str.encode("utf-8")
+        else:
+            return [TextContent(type="text", text="`file_path` 또는 `content`를 지정하세요.")]
+
+        # 2. TUS 업로드
+        file_id = await _tus_upload(filename, raw)
+
+        # 3. RAG 분석 엔드포인트 호출 (유형 감지 + 인제스트)
+        analyze_body = {
+            "usage_type": "measurement_data",  # analyze endpoint가 자동 결정
+            "source": source or filename,
+            "tags": tags,
+            "chunk_size": 4000,
+        }
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(
+                f"{RAG_URL}/upload/analyze/{file_id}",
+                json=analyze_body,
+                headers=_rag_headers(),
+            )
+            resp.raise_for_status()
+            analyze = resp.json()
+
+        file_type   = analyze.get("file_type", "document")
+        type_reason = analyze.get("type_reason", "")
+        excerpt     = analyze.get("text_excerpt", "")
+        storage_path = analyze.get("storage_path", "")
+        chunks_n    = analyze.get("chunks_ingested", 0)
+
+        # 4. 분석 쿼리 작성
+        type_labels = {
+            "medical":     "의료 데이터",
+            "signal_data": "신호/측정 데이터",
+            "document":    "문서",
+        }
+        label = type_labels.get(file_type, "파일")
+        user_query = query or f"이 {label}의 내용을 분석하고 핵심 정보를 요약해주세요."
+
+        system_map = {
+            "medical": (
+                "You are a clinical AI assistant specializing in medical data analysis. "
+                "Analyze the provided medical file content with clinical precision. "
+                "Identify patient data, diagnoses, medications, lab results, or clinical findings. "
+                "Provide structured clinical insights."
+            ),
+            "signal_data": (
+                "You are a biomedical signal analysis expert. "
+                "Analyze the provided measurement/signal data. "
+                "Identify patterns, anomalies, statistical properties, and clinical relevance if applicable."
+            ),
+            "document": (
+                "You are a document analysis assistant. "
+                "Summarize the key information, main topics, and important findings from the document."
+            ),
+        }
+
+        model_map = {
+            "medical":     "medical",
+            "signal_data": "auto",
+            "document":    "auto",
+        }
+
+        ai_messages = [
+            {"role": "system", "content": system_map.get(file_type, system_map["document"])},
+            {"role": "user", "content": (
+                f"파일: {filename}\n"
+                f"유형: {label} ({type_reason})\n"
+                f"저장 위치: {storage_path}\n\n"
+                f"--- 파일 내용 (발췌) ---\n{excerpt[:1500]}\n--- 끝 ---\n\n"
+                f"{user_query}"
+            )},
+        ]
+
+        ai_data = await gateway_chat(ai_messages, model=model_map[file_type])
+        ai_text = format_response(ai_data)
+
+        lines = [
+            f"## 파일 분석 결과: `{filename}`",
+            "",
+            f"| 항목 | 값 |",
+            f"|------|-----|",
+            f"| 파일 유형 | **{label}** ({type_reason}) |",
+            f"| 저장 위치 | `{storage_path}` |",
+            f"| 파일 ID | `{file_id}` |",
+            f"| RAG 인제스트 | {chunks_n}청크 완료 |",
+            f"| 크기 | {len(raw):,} bytes |",
+            "",
+            "---",
+            "",
+            ai_text,
+        ]
+        return [TextContent(type="text", text="\n".join(lines))]
 
     # ── quetta_upload_file ────────────────────────────────────────────────────
     elif name == "quetta_upload_file":
