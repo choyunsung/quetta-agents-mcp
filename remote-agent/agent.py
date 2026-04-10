@@ -1,44 +1,43 @@
 #!/usr/bin/env python3
 """
-Quetta Remote Agent — Claude Computer Use Bridge
-원격 PC를 Claude MCP 도구로 제어할 수 있게 해주는 에이전트.
+Quetta Remote Agent — WebSocket 클라이언트
+서버(rag.quetta-soft.com)에 역방향 WebSocket으로 연결해서
+Claude의 명령(스크린샷/클릭/키보드/셸 등)을 실행한다.
+
+환경변수(.env):
+  AGENT_WS_URL   — wss://rag.quetta-soft.com/agent/ws
+  AGENT_TOKEN    — 서버에서 발급한 인증 토큰
 
 실행:
-  python agent.py                    # 토큰 자동 생성
-  python agent.py --token MY_TOKEN   # 토큰 지정
-  python agent.py --port 7701        # 포트 지정
-
-환경변수:
-  QUETTA_AGENT_TOKEN  — 인증 토큰
-  QUETTA_AGENT_PORT   — 포트 (기본 7701)
+  python agent.py
 """
 
-import argparse
+import asyncio
 import base64
 import io
+import json
 import os
 import platform
-import secrets
 import subprocess
 import sys
-import time
-from typing import Optional
+
+# ── 설정 ────────────────────────────────────────────────────────────────────
+
+AGENT_WS_URL = os.getenv("AGENT_WS_URL", "")
+AGENT_TOKEN  = os.getenv("AGENT_TOKEN",  "")
+
+# ── 의존성 자동 설치 ─────────────────────────────────────────────────────────
+
+def _pip_install(*pkgs):
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade", *pkgs], check=True)
 
 try:
-    from fastapi import FastAPI, HTTPException, Security
-    from fastapi.security.api_key import APIKeyHeader
-    from pydantic import BaseModel
-    import uvicorn
+    import websockets
 except ImportError:
-    print("fastapi/uvicorn 미설치. 설치 중...")
-    subprocess.run([sys.executable, "-m", "pip", "install",
-                    "fastapi", "uvicorn[standard]", "pillow"], check=True)
-    from fastapi import FastAPI, HTTPException, Security
-    from fastapi.security.api_key import APIKeyHeader
-    from pydantic import BaseModel
-    import uvicorn
+    print("websockets 설치 중...")
+    _pip_install("websockets")
+    import websockets
 
-# GUI 제어 (선택적)
 try:
     import pyautogui
     pyautogui.FAILSAFE = True
@@ -46,310 +45,212 @@ try:
 except ImportError:
     HAS_GUI = False
 
-# 스크린샷
 try:
     import mss
     from PIL import Image
-    HAS_SCREENSHOT = True
+    HAS_SS = True
+    _USE_MSS = True
 except ImportError:
+    _USE_MSS = False
     try:
         from PIL import ImageGrab, Image
-        HAS_SCREENSHOT = True
-        mss = None
+        HAS_SS = True
     except ImportError:
-        HAS_SCREENSHOT = False
-
-# ── 전역 설정 ───────────────────────────────────────────────────────────────
-
-TOKEN = os.getenv("QUETTA_AGENT_TOKEN", "")
-app = FastAPI(
-    title="Quetta Remote Agent",
-    description="Claude Computer Use Bridge — 원격 PC 제어 에이전트",
-    version="1.0.0",
-)
-api_key_header = APIKeyHeader(name="X-Agent-Token", auto_error=False)
+        HAS_SS = False
 
 
-def verify_token(token: str = Security(api_key_header)):
-    if TOKEN and token != TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    return token
+# ── 명령 핸들러 ───────────────────────────────────────────────────────────────
 
-
-# ── Models ─────────────────────────────────────────────────────────────────
-
-class ClickRequest(BaseModel):
-    x: int
-    y: int
-    button: str = "left"       # left / right / middle
-    double: bool = False
-
-class TypeRequest(BaseModel):
-    text: str
-    interval: float = 0.03     # 글자당 딜레이(초)
-
-class KeyRequest(BaseModel):
-    key: str                   # "ctrl+c", "enter", "alt+tab", "win" 등
-
-class MoveRequest(BaseModel):
-    x: int
-    y: int
-    duration: float = 0.2
-
-class ScrollRequest(BaseModel):
-    x: Optional[int] = None
-    y: Optional[int] = None
-    clicks: int = 3            # 양수 = 위, 음수 = 아래
-
-class DragRequest(BaseModel):
-    x1: int
-    y1: int
-    x2: int
-    y2: int
-    duration: float = 0.3
-
-class ShellRequest(BaseModel):
-    command: str
-    timeout: int = 30
-    cwd: Optional[str] = None
-
-class ScreenshotRequest(BaseModel):
-    max_width: int = 1280      # 리사이즈 최대 폭
-    quality: int = 85          # JPEG 품질 (PNG면 무시)
-    format: str = "png"        # png / jpeg
-
-
-# ── Endpoints ──────────────────────────────────────────────────────────────
-
-@app.get("/health")
-async def health():
+def _health(_p=None):
+    gpu = _detect_gpu()
     return {
-        "status": "ok",
-        "hostname": platform.node(),
-        "platform": platform.system(),
-        "python": platform.python_version(),
-        "has_gui": HAS_GUI,
-        "has_screenshot": HAS_SCREENSHOT,
-        "gpu": _detect_gpu(),
+        "hostname":        platform.node(),
+        "platform":        platform.system(),
+        "python":          platform.python_version(),
+        "gpu":             gpu,
+        "has_gui":         HAS_GUI,
+        "has_screenshot":  HAS_SS,
     }
 
 
-@app.get("/screenshot")
-async def screenshot(
-    max_width: int = 1280,
-    fmt: str = "png",
-    _token=Security(verify_token),
-):
-    """현재 화면 스크린샷을 base64로 반환."""
-    if not HAS_SCREENSHOT:
-        raise HTTPException(500, "PIL/mss 미설치 — pip install mss pillow")
+def _detect_gpu() -> str:
+    for cmd in (
+        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+        ["rocm-smi", "--showproductname"],
+    ):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip().split("\n")[0]
+        except Exception:
+            pass
+    return "없음 (CPU only)"
 
-    if mss:
-        with mss.mss() as sct:
-            raw = sct.grab(sct.monitors[0])
+
+def _screenshot(p):
+    if not HAS_SS:
+        return {"error": "mss/pillow 미설치 — pip install mss pillow"}
+    max_w = p.get("max_width", 1280)
+
+    if _USE_MSS:
+        with mss.mss() as s:
+            raw = s.grab(s.monitors[0])
             img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
     else:
         img = ImageGrab.grab()
 
-    # 리사이즈
-    if img.width > max_width:
-        ratio = max_width / img.width
-        img = img.resize((max_width, int(img.height * ratio)), Image.LANCZOS)
+    if img.width > max_w:
+        ratio = max_w / img.width
+        img = img.resize((max_w, int(img.height * ratio)), Image.LANCZOS)
 
     buf = io.BytesIO()
-    if fmt == "jpeg":
-        img.save(buf, format="JPEG", quality=85)
-        mime = "image/jpeg"
-    else:
-        img.save(buf, format="PNG")
-        mime = "image/png"
-
+    img.save(buf, format="PNG")
     return {
-        "image": base64.b64encode(buf.getvalue()).decode(),
-        "mime": mime,
-        "width": img.width,
+        "image":  base64.b64encode(buf.getvalue()).decode(),
+        "mime":   "image/png",
+        "width":  img.width,
         "height": img.height,
     }
 
 
-@app.post("/click")
-async def click(req: ClickRequest, _token=Security(verify_token)):
-    _require_gui()
-    if req.double:
-        pyautogui.doubleClick(req.x, req.y, button=req.button)
+def _click(p):
+    if not HAS_GUI:
+        return {"error": "pyautogui 미설치"}
+    x, y = p["x"], p["y"]
+    btn  = p.get("button", "left")
+    if p.get("double"):
+        pyautogui.doubleClick(x, y, button=btn)
     else:
-        pyautogui.click(req.x, req.y, button=req.button)
-    return {"ok": True, "x": req.x, "y": req.y}
+        pyautogui.click(x, y, button=btn)
+    return {"ok": True, "x": x, "y": y}
 
 
-@app.post("/type")
-async def type_text(req: TypeRequest, _token=Security(verify_token)):
-    _require_gui()
-    # 특수문자 포함 텍스트는 pyperclip+paste 방식이 더 안정적
+def _type(p):
+    if not HAS_GUI:
+        return {"error": "pyautogui 미설치"}
+    text = p["text"]
     try:
         import pyperclip
-        pyperclip.copy(req.text)
+        pyperclip.copy(text)
         pyautogui.hotkey("ctrl", "v")
     except ImportError:
-        pyautogui.write(req.text, interval=req.interval)
-    return {"ok": True, "length": len(req.text)}
+        pyautogui.write(text, interval=p.get("interval", 0.03))
+    return {"ok": True, "length": len(text)}
 
 
-@app.post("/key")
-async def press_key(req: KeyRequest, _token=Security(verify_token)):
-    _require_gui()
-    keys = [k.strip() for k in req.key.lower().split("+")]
+def _key(p):
+    if not HAS_GUI:
+        return {"error": "pyautogui 미설치"}
+    keys = [k.strip() for k in p["key"].lower().split("+")]
     if len(keys) > 1:
         pyautogui.hotkey(*keys)
     else:
         pyautogui.press(keys[0])
-    return {"ok": True, "key": req.key}
+    return {"ok": True, "key": p["key"]}
 
 
-@app.post("/move")
-async def move_mouse(req: MoveRequest, _token=Security(verify_token)):
-    _require_gui()
-    pyautogui.moveTo(req.x, req.y, duration=req.duration)
+def _move(p):
+    if not HAS_GUI:
+        return {"error": "pyautogui 미설치"}
+    pyautogui.moveTo(p["x"], p["y"], duration=p.get("duration", 0.2))
     return {"ok": True}
 
 
-@app.post("/scroll")
-async def scroll(req: ScrollRequest, _token=Security(verify_token)):
-    _require_gui()
-    kwargs = {"clicks": req.clicks}
-    if req.x is not None:
-        kwargs["x"] = req.x
-    if req.y is not None:
-        kwargs["y"] = req.y
-    pyautogui.scroll(**kwargs)
+def _scroll(p):
+    if not HAS_GUI:
+        return {"error": "pyautogui 미설치"}
+    kw = {"clicks": p.get("clicks", 3)}
+    if p.get("x") is not None: kw["x"] = p["x"]
+    if p.get("y") is not None: kw["y"] = p["y"]
+    pyautogui.scroll(**kw)
     return {"ok": True}
 
 
-@app.post("/drag")
-async def drag(req: DragRequest, _token=Security(verify_token)):
-    _require_gui()
-    pyautogui.moveTo(req.x1, req.y1)
-    pyautogui.dragTo(req.x2, req.y2, duration=req.duration, button="left")
-    return {"ok": True}
-
-
-@app.post("/shell")
-async def shell_cmd(req: ShellRequest, _token=Security(verify_token)):
-    """셸 명령어 실행. stdout/stderr 반환."""
+def _shell(p):
     try:
-        result = subprocess.run(
-            req.command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=req.timeout,
-            cwd=req.cwd,
+        r = subprocess.run(
+            p["command"], shell=True,
+            capture_output=True, text=True,
+            timeout=p.get("timeout", 30),
+            cwd=p.get("cwd") or None,
         )
         return {
-            "returncode": result.returncode,
-            "stdout": result.stdout[-8000:],
-            "stderr": result.stderr[-2000:],
+            "returncode": r.returncode,
+            "stdout":     r.stdout[-8000:],
+            "stderr":     r.stderr[-2000:],
         }
     except subprocess.TimeoutExpired:
-        return {"returncode": -1, "stdout": "", "stderr": f"Timeout ({req.timeout}s)"}
+        return {"returncode": -1, "stdout": "", "stderr": "Timeout"}
     except Exception as e:
         return {"returncode": -2, "stdout": "", "stderr": str(e)}
 
 
-@app.get("/cursor")
-async def get_cursor(_token=Security(verify_token)):
-    """현재 마우스 커서 위치 반환."""
-    _require_gui()
-    x, y = pyautogui.position()
-    return {"x": x, "y": y}
+HANDLERS = {
+    "health":     _health,
+    "screenshot": _screenshot,
+    "click":      _click,
+    "type":       _type,
+    "key":        _key,
+    "move":       _move,
+    "scroll":     _scroll,
+    "shell":      _shell,
+}
 
 
-@app.get("/screen_size")
-async def screen_size(_token=Security(verify_token)):
-    """화면 해상도 반환."""
-    _require_gui()
-    w, h = pyautogui.size()
-    return {"width": w, "height": h}
+# ── WebSocket 연결 루프 ───────────────────────────────────────────────────────
 
+async def run():
+    if not AGENT_WS_URL:
+        print("AGENT_WS_URL 이 설정되지 않았습니다. .env 파일을 확인하세요.")
+        sys.exit(1)
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+    url = f"{AGENT_WS_URL}?token={AGENT_TOKEN}"
+    reconnect_delay = 3
 
-def _require_gui():
-    if not HAS_GUI:
-        raise HTTPException(
-            500,
-            "pyautogui 미설치 — pip install pyautogui\n"
-            "Linux headless: sudo apt install python3-tk python3-dev scrot"
-        )
+    while True:
+        try:
+            print(f"→ 연결 중: {AGENT_WS_URL}")
+            async with websockets.connect(
+                url,
+                ping_interval=30,
+                ping_timeout=15,
+                close_timeout=5,
+            ) as ws:
+                # Hello: 에이전트 정보 전송
+                await ws.send(json.dumps({"type": "hello", "info": _health()}))
+                h = _health()
+                print(f"✅ 연결 완료! — {h['hostname']} | GPU: {h['gpu']}")
+                reconnect_delay = 3  # 성공 시 리셋
 
+                async for raw in ws:
+                    cmd     = json.loads(raw)
+                    cmd_id  = cmd.get("id")
+                    handler = HANDLERS.get(cmd.get("type", ""))
 
-def _detect_gpu() -> str:
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip().split("\n")[0]
-    except Exception:
-        pass
-    try:
-        out = subprocess.run(
-            ["rocm-smi", "--showproductname"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if out.returncode == 0:
-            return "AMD GPU (ROCm)"
-    except Exception:
-        pass
-    return "없음 (CPU only)"
+                    try:
+                        result = handler(cmd.get("payload", {})) if handler \
+                                 else {"error": f"알 수 없는 명령: {cmd.get('type')}"}
+                        await ws.send(json.dumps({
+                            "id": cmd_id, "status": "ok", "data": result,
+                        }))
+                    except Exception as e:
+                        await ws.send(json.dumps({
+                            "id": cmd_id, "status": "error", "error": str(e),
+                        }))
 
-
-# ── Entry Point ────────────────────────────────────────────────────────────
-
-def main():
-    global TOKEN
-
-    parser = argparse.ArgumentParser(description="Quetta Remote Agent")
-    parser.add_argument("--port", type=int, default=int(os.getenv("QUETTA_AGENT_PORT", "7701")))
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--token", default="")
-    args = parser.parse_args()
-
-    if args.token:
-        TOKEN = args.token
-    if not TOKEN:
-        TOKEN = secrets.token_hex(20)
-        print(f"\n🔑 자동 생성 토큰: {TOKEN}")
-
-    local_ip = _get_local_ip()
-
-    print(f"""
-╔══════════════════════════════════════════════╗
-║         Quetta Remote Agent v1.0             ║
-╠══════════════════════════════════════════════╣
-║  내부 주소: http://{local_ip}:{args.port:<5}         ║
-║  토큰: {TOKEN[:20]}...         ║
-╠══════════════════════════════════════════════╣
-║  Claude Code settings.json 에 추가:          ║
-║  QUETTA_REMOTE_AGENT_URL=                    ║
-║    http://{local_ip}:{args.port}             ║
-║  QUETTA_REMOTE_AGENT_TOKEN={TOKEN[:16]}...   ║
-╚══════════════════════════════════════════════╝
-""")
-
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
-
-
-def _get_local_ip() -> str:
-    import socket
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    except Exception:
-        return "127.0.0.1"
+        except Exception as e:
+            print(f"✗ 연결 끊김: {e}")
+            print(f"  {reconnect_delay}초 후 재연결...")
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, 60)
 
 
 if __name__ == "__main__":
-    main()
+    print(f"""
+╔══════════════════════════════════════════════╗
+║         Quetta Remote Agent                  ║
+║  서버로 역방향 WebSocket 연결                 ║
+╚══════════════════════════════════════════════╝
+  서버: {AGENT_WS_URL or '(AGENT_WS_URL 미설정)'}
+""")
+    asyncio.run(run())

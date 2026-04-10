@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.5.0"
+VERSION          = "0.6.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -67,9 +67,9 @@ RAG_URL          = os.getenv("QUETTA_RAG_URL",    "http://localhost:8400")   # R
 TUSD_TOKEN       = os.getenv("QUETTA_TUSD_TOKEN", "")                        # X-API-Token for tusd
 RAG_KEY          = os.getenv("QUETTA_RAG_KEY",    "rag-claude-key-2026")     # X-API-Key for RAG
 
-# 원격 에이전트 (Remote PC Computer Use)
-REMOTE_AGENT_URL   = os.getenv("QUETTA_REMOTE_AGENT_URL",   "")   # http://REMOTE_IP:7701
-REMOTE_AGENT_TOKEN = os.getenv("QUETTA_REMOTE_AGENT_TOKEN", "")   # X-Agent-Token
+# 원격 에이전트 (릴레이 방식 — 에이전트가 게이트웨이에 역방향 WebSocket 연결)
+# QUETTA_REMOTE_AGENT_ID: 연결된 에이전트 ID (quetta_remote_connect 로 확인)
+REMOTE_AGENT_ID = os.getenv("QUETTA_REMOTE_AGENT_ID", "")
 
 server = Server("quetta-agents")
 
@@ -83,30 +83,51 @@ def _auth_headers() -> dict:
     return {}
 
 
-def _remote_agent_headers() -> dict:
-    """Return remote agent auth headers."""
-    if REMOTE_AGENT_TOKEN:
-        return {"X-Agent-Token": REMOTE_AGENT_TOKEN}
-    return {}
-
-
-async def _remote_agent(method: str, path: str, **kwargs) -> dict:
-    """Call the remote agent API."""
-    if not REMOTE_AGENT_URL:
-        raise ValueError(
-            "QUETTA_REMOTE_AGENT_URL 환경변수가 설정되지 않았습니다.\n"
-            "원격 PC에 에이전트를 설치하고 URL을 설정하세요.\n"
-            "설치: curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/remote-agent/install.sh | bash"
-        )
-    base = REMOTE_AGENT_URL.rstrip("/")
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await getattr(client, method)(
-            f"{base}{path}",
-            headers=_remote_agent_headers(),
-            **kwargs,
+async def _relay(agent_id: str, cmd_type: str, payload: dict = {}, timeout: float = 120) -> dict:
+    """게이트웨이 릴레이를 통해 원격 에이전트에 명령 전송."""
+    async with httpx.AsyncClient(timeout=timeout + 5) as client:
+        resp = await client.post(
+            f"{GATEWAY_URL}/agent/{agent_id}/cmd",
+            json={"type": cmd_type, "payload": payload},
+            headers=_auth_headers(),
+            params={"timeout": timeout},
         )
         resp.raise_for_status()
         return resp.json()
+
+
+async def _relay_get(path: str) -> Any:
+    """게이트웨이 릴레이 REST GET."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"{GATEWAY_URL}{path}",
+            headers=_auth_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _relay_post_raw(path: str, body: dict) -> Any:
+    """게이트웨이 릴레이 REST POST."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            f"{GATEWAY_URL}{path}",
+            json=body,
+            headers=_auth_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _active_agent_id(arguments: dict) -> str:
+    """인수 또는 환경변수에서 agent_id 반환. 없으면 예외."""
+    aid = arguments.get("agent_id", "").strip() or REMOTE_AGENT_ID
+    if not aid:
+        raise ValueError(
+            "agent_id 가 지정되지 않았습니다.\n"
+            "`quetta_remote_connect` 를 먼저 실행해 연결된 에이전트 ID를 확인하세요."
+        )
+    return aid
 
 
 def _rag_headers() -> dict:
@@ -453,28 +474,37 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="quetta_remote_connect",
             description=(
-                "원격 PC 에이전트 연결 상태를 확인하고 설치 안내를 제공합니다.\n\n"
-                "에이전트 미설치 시 설치 명령어를 알려줍니다:\n"
-                "  curl -fsSL https://raw.githubusercontent.com/choyunsung/"
-                "quetta-agents-mcp/master/remote-agent/install.sh | bash\n\n"
-                "연결 성공 시: GPU 정보, OS, 화면 제어 가능 여부 반환"
-            ),
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="quetta_remote_screenshot",
-            description=(
-                "원격 PC의 현재 화면을 캡처해서 보여줍니다.\n"
-                "Claude가 원격 화면을 보고 다음 액션을 결정할 때 사용합니다."
+                "연결된 원격 에이전트 목록을 조회하거나 설치 링크를 생성합니다.\n\n"
+                "에이전트 미설치 시: OS를 지정하면 설치 URL을 생성합니다.\n"
+                "연결 성공 시: 에이전트 ID, GPU 정보, OS, 화면 제어 가능 여부 반환\n\n"
+                "에이전트는 서버로 역방향 WebSocket을 연결하므로 포트포워딩 불필요."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "max_width": {
-                        "type": "integer",
-                        "description": "최대 폭 (픽셀, 기본 1280)",
-                        "default": 1280,
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "install-link"],
+                        "description": "list: 연결된 에이전트 목록 | install-link: 설치 링크 생성",
+                        "default": "list",
                     },
+                    "os": {
+                        "type": "string",
+                        "enum": ["linux", "mac", "windows"],
+                        "description": "설치 링크 생성 시 대상 OS",
+                        "default": "linux",
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="quetta_remote_screenshot",
+            description="원격 PC의 현재 화면을 캡처해서 보여줍니다. Claude가 화면을 보고 다음 액션을 결정할 때 사용합니다.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string", "description": "에이전트 ID (quetta_remote_connect로 확인)", "default": ""},
+                    "max_width": {"type": "integer", "description": "최대 폭 픽셀 (기본 1280)", "default": 1280},
                 },
             },
         ),
@@ -484,13 +514,10 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "x": {"type": "integer", "description": "X 좌표 (픽셀)"},
-                    "y": {"type": "integer", "description": "Y 좌표 (픽셀)"},
-                    "button": {
-                        "type": "string",
-                        "enum": ["left", "right", "middle"],
-                        "default": "left",
-                    },
+                    "agent_id": {"type": "string", "description": "에이전트 ID", "default": ""},
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                    "button": {"type": "string", "enum": ["left","right","middle"], "default": "left"},
                     "double": {"type": "boolean", "default": False},
                 },
                 "required": ["x", "y"],
@@ -498,10 +525,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="quetta_remote_type",
-            description="원격 PC에 텍스트를 입력합니다. 클릭으로 입력 포커스를 먼저 맞추세요.",
+            description="원격 PC에 텍스트를 입력합니다. 클릭으로 포커스를 먼저 맞추세요.",
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "agent_id": {"type": "string", "default": ""},
                     "text": {"type": "string", "description": "입력할 텍스트"},
                 },
                 "required": ["text"],
@@ -509,41 +537,26 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="quetta_remote_key",
-            description=(
-                "원격 PC에서 키보드 단축키를 누릅니다.\n"
-                "예: 'enter', 'ctrl+c', 'alt+tab', 'ctrl+shift+t', 'win'"
-            ),
+            description="원격 PC에서 키보드 단축키를 누릅니다. 예: 'enter', 'ctrl+c', 'alt+tab'",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "key": {
-                        "type": "string",
-                        "description": "키 또는 단축키 조합 (+ 로 구분, 예: ctrl+c)",
-                    },
+                    "agent_id": {"type": "string", "default": ""},
+                    "key": {"type": "string", "description": "키 조합 (+ 로 구분, 예: ctrl+c)"},
                 },
                 "required": ["key"],
             },
         ),
         Tool(
             name="quetta_remote_shell",
-            description=(
-                "원격 PC에서 셸 명령어를 실행하고 결과를 반환합니다.\n"
-                "GPU 학습 실행, 파일 관리, 프로그램 시작 등에 활용합니다."
-            ),
+            description="원격 PC에서 셸 명령어를 실행하고 결과를 반환합니다. GPU 학습 실행, 파일 관리 등.",
             inputSchema={
                 "type": "object",
                 "properties": {
+                    "agent_id": {"type": "string", "default": ""},
                     "command": {"type": "string", "description": "실행할 명령어"},
-                    "timeout": {
-                        "type": "integer",
-                        "description": "타임아웃 (초, 기본 30)",
-                        "default": 30,
-                    },
-                    "cwd": {
-                        "type": "string",
-                        "description": "작업 디렉토리",
-                        "default": "",
-                    },
+                    "timeout": {"type": "integer", "default": 30},
+                    "cwd": {"type": "string", "default": ""},
                 },
                 "required": ["command"],
             },
@@ -908,106 +921,119 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     # ── quetta_remote_connect ─────────────────────────────────────────────────
     elif name == "quetta_remote_connect":
-        install_url = "https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/remote-agent/install.sh"
+        action = arguments.get("action", "list")
+        os_type = arguments.get("os", "linux")
 
-        if not REMOTE_AGENT_URL:
+        if action == "install-link":
+            data = await _relay_get(f"/agent/install-link?os={os_type}")
+            url  = data.get("url", "")
             lines = [
-                "## Quetta Remote Agent — 설치 안내",
+                f"## Quetta Remote Agent 설치 링크 ({os_type})",
                 "",
-                "원격 PC에서 아래 명령어를 실행하세요:\n",
-                "```bash",
-                f"curl -fsSL {install_url} | bash",
+                "**원격 PC에서 아래 명령어를 실행하세요:**",
+                "",
+            ]
+            if os_type == "windows":
+                lines += [
+                    f"```",
+                    f"# {url}",
+                    f"# 위 URL을 브라우저에서 다운로드 후 실행",
+                    "```",
+                ]
+            else:
+                lines += [
+                    "```bash",
+                    f'curl -fsSL "{url}" | bash',
+                    "```",
+                ]
+            lines += [
+                "",
+                f"- 링크 유효기간: {data.get('expires_in', '24시간')}",
+                "",
+                "설치 후 에이전트가 자동으로 서버에 연결됩니다.",
+                "연결 확인: `quetta_remote_connect` (action=list)",
+            ]
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        # action == "list"
+        agents = await _relay_get("/agent/agents")
+        if not agents:
+            lines = [
+                "## 연결된 원격 에이전트 없음",
+                "",
+                "설치 링크를 생성하려면:",
                 "```",
-                "",
-                "설치 완료 후 출력되는 값을 Claude Code `settings.json`에 추가:",
-                "```json",
-                '"env": {',
-                '  "QUETTA_REMOTE_AGENT_URL": "http://원격PC_IP:7701",',
-                '  "QUETTA_REMOTE_AGENT_TOKEN": "설치시_출력된_토큰"',
-                "}",
-                "```",
-                "",
-                "에이전트 실행:",
-                "```bash",
-                "~/.quetta-remote-agent/start.sh",
-                "# 백그라운드:",
-                "nohup ~/.quetta-remote-agent/start.sh > ~/.quetta-remote-agent/agent.log 2>&1 &",
+                'quetta_remote_connect(action="install-link", os="linux")',
                 "```",
             ]
             return [TextContent(type="text", text="\n".join(lines))]
 
-        try:
-            data = await _remote_agent("get", "/health")
-            lines = [
-                "## 원격 에이전트 연결 성공 ✅",
+        lines = [f"## 연결된 원격 에이전트 ({len(agents)}개)\n"]
+        for ag in agents:
+            lines += [
+                f"### ID: `{ag['id']}`",
+                f"- 호스트: {ag.get('hostname','?')}  |  OS: {ag.get('platform','?')}",
+                f"- GPU: **{ag.get('gpu','없음')}**",
+                f"- 화면 제어: {'✅' if ag.get('has_gui') else '❌'}  |  스크린샷: {'✅' if ag.get('has_screenshot') else '❌'}",
+                f"- 연결 경과: {ag.get('connected_sec',0)}초",
                 "",
-                f"- 호스트: `{data.get('hostname', '?')}`",
-                f"- OS: {data.get('platform', '?')}",
-                f"- GPU: **{data.get('gpu', '없음')}**",
-                f"- 화면 제어: {'가능 ✅' if data.get('has_gui') else '불가 ❌ (pyautogui 미설치)'}",
-                f"- 스크린샷: {'가능 ✅' if data.get('has_screenshot') else '불가 ❌ (mss/pillow 미설치)'}",
-                f"- 연결 URL: `{REMOTE_AGENT_URL}`",
             ]
-            return [TextContent(type="text", text="\n".join(lines))]
-        except Exception as e:
-            return [TextContent(type="text", text=(
-                f"❌ 연결 실패: {e}\n\n"
-                f"- URL 확인: `{REMOTE_AGENT_URL}`\n"
-                f"- 원격 PC에서 에이전트가 실행 중인지 확인하세요.\n"
-                f"- 방화벽에서 포트 7701이 열려있는지 확인하세요."
-            ))]
+        lines.append("_agent_id를 복사해서 다른 도구에 사용하세요._")
+        return [TextContent(type="text", text="\n".join(lines))]
 
     # ── quetta_remote_screenshot ──────────────────────────────────────────────
     elif name == "quetta_remote_screenshot":
-        max_width = arguments.get("max_width", 1280)
-        data = await _remote_agent("get", "/screenshot", params={"max_width": max_width})
-        img_b64 = data.get("image", "")
-        mime    = data.get("mime", "image/png")
-        w, h    = data.get("width", 0), data.get("height", 0)
-
+        aid  = _active_agent_id(arguments)
+        data = await _relay(aid, "screenshot", {"max_width": arguments.get("max_width", 1280)}, timeout=30)
+        inner = data.get("data", data)
+        img_b64 = inner.get("image", "")
+        mime    = inner.get("mime", "image/png")
+        w, h    = inner.get("width", 0), inner.get("height", 0)
         return [
             ImageContent(type="image", data=img_b64, mimeType=mime),
-            TextContent(type="text", text=f"_화면 크기: {w}×{h}px  |  원격 PC: {REMOTE_AGENT_URL}_"),
+            TextContent(type="text", text=f"_화면: {w}×{h}px  |  에이전트: {aid}_"),
         ]
 
     # ── quetta_remote_click ───────────────────────────────────────────────────
     elif name == "quetta_remote_click":
-        await _remote_agent("post", "/click", json={
-            "x": arguments["x"],
-            "y": arguments["y"],
+        aid = _active_agent_id(arguments)
+        await _relay(aid, "click", {
+            "x": arguments["x"], "y": arguments["y"],
             "button": arguments.get("button", "left"),
             "double": arguments.get("double", False),
-        })
-        return [TextContent(type="text", text=f"클릭: ({arguments['x']}, {arguments['y']}) {arguments.get('button','left')}")]
+        }, timeout=10)
+        return [TextContent(type="text", text=f"클릭: ({arguments['x']}, {arguments['y']}) [{arguments.get('button','left')}]")]
 
     # ── quetta_remote_type ────────────────────────────────────────────────────
     elif name == "quetta_remote_type":
+        aid = _active_agent_id(arguments)
         text = arguments["text"]
-        await _remote_agent("post", "/type", json={"text": text})
+        await _relay(aid, "type", {"text": text}, timeout=30)
         return [TextContent(type="text", text=f"입력 완료: {len(text)}자")]
 
     # ── quetta_remote_key ─────────────────────────────────────────────────────
     elif name == "quetta_remote_key":
+        aid = _active_agent_id(arguments)
         key = arguments["key"]
-        await _remote_agent("post", "/key", json={"key": key})
+        await _relay(aid, "key", {"key": key}, timeout=10)
         return [TextContent(type="text", text=f"키 입력: `{key}`")]
 
     # ── quetta_remote_shell ───────────────────────────────────────────────────
     elif name == "quetta_remote_shell":
-        data = await _remote_agent("post", "/shell", json={
+        aid  = _active_agent_id(arguments)
+        tout = arguments.get("timeout", 30)
+        data = await _relay(aid, "shell", {
             "command": arguments["command"],
-            "timeout": arguments.get("timeout", 30),
+            "timeout": tout,
             "cwd": arguments.get("cwd") or None,
-        })
-        rc     = data.get("returncode", -1)
-        stdout = data.get("stdout", "")
-        stderr = data.get("stderr", "")
-
-        lines = [f"**`{arguments['command']}`** → returncode {rc}"]
-        if stdout:
-            lines += ["```", stdout.strip()[-4000:], "```"]
-        if stderr:
-            lines += [f"_stderr:_", "```", stderr.strip()[-1000:], "```"]
+        }, timeout=tout + 10)
+        inner  = data.get("data", data)
+        rc     = inner.get("returncode", -1)
+        stdout = inner.get("stdout", "")
+        stderr = inner.get("stderr", "")
+        lines  = [f"**`{arguments['command']}`** → rc={rc}"]
+        if stdout: lines += ["```", stdout.strip()[-4000:], "```"]
+        if stderr: lines += ["_stderr:_", "```", stderr.strip()[-1000:], "```"]
         return [TextContent(type="text", text="\n".join(lines))]
 
     # ── quetta_analyze_file ───────────────────────────────────────────────────
