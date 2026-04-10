@@ -8,30 +8,32 @@ Automatically routes queries to the best model:
 - **Complex multi-step** → SCION parallel multi-agent (3× Gemma4 + Claude synthesis)
 - **Simple queries** → Gemma4 (local, free, fast)
 
+---
+
 ## Installation
 
-### 서버 (SSH 키 등록된 경우)
+### One-line (recommended)
 
-`~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "quetta-agents": {
-      "command": "uvx",
-      "args": ["--from", "git+ssh://git@github.com/choyunsung/quetta-agents-mcp", "quetta-agents-mcp"],
-      "env": {
-        "QUETTA_GATEWAY_URL": "http://localhost:8701",
-        "QUETTA_ORCHESTRATOR_URL": "http://localhost:8700",
-        "QUETTA_TIMEOUT": "300",
-        "QUETTA_API_KEY": ""
-      }
-    }
-  }
-}
+```bash
+curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh | bash
 ```
 
-### 개인 PC (외부 접근)
+With custom gateway and API key:
+
+```bash
+QUETTA_GATEWAY_URL=https://rag.quetta-soft.com \
+QUETTA_API_KEY=your_api_key \
+bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+```
+
+The script will:
+1. Install `uv` if not present
+2. Add `quetta-agents` to `~/.claude/settings.json`
+3. Prompt for Gateway URL and API key (if not set via env vars)
+
+### Manual
+
+Add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -50,8 +52,9 @@ Automatically routes queries to the best model:
 }
 ```
 
-> SSH 키가 없는 경우 GitHub Personal Access Token 사용:  
-> `git+https://TOKEN@github.com/choyunsung/quetta-agents-mcp`
+> **Local (same machine):** set `QUETTA_GATEWAY_URL=http://localhost:8701` and leave `QUETTA_API_KEY` empty.
+
+---
 
 ## Tools
 
@@ -65,6 +68,8 @@ Automatically routes queries to the best model:
 | `quetta_list_agents` | List registered specialist agents |
 | `quetta_run_agent` | Delegate task to a specific agent |
 
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -72,4 +77,4 @@ Automatically routes queries to the best model:
 | `QUETTA_GATEWAY_URL` | `http://localhost:8701` | Gateway API URL |
 | `QUETTA_ORCHESTRATOR_URL` | `http://localhost:8700` | Orchestrator URL |
 | `QUETTA_API_KEY` | _(empty)_ | API key (외부 접근 시 필수) |
-| `QUETTA_TIMEOUT` | `300` | Request timeout (seconds) |
+| `QUETTA_TIMEOUT` | `300` | Request timeout in seconds |
