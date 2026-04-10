@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-quetta-agents-mcp = "quetta_agents_mcp.server:main"
+quetta-agents-mcp = "quetta_agents_mcp.server:cli_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["quetta_agents_mcp"]

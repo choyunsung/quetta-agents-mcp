@@ -139,7 +139,7 @@ async def _run_update() -> tuple[bool, str]:
         return False, "`uvx`를 찾을 수 없습니다. https://docs.astral.sh/uv/ 에서 설치하세요."
 
     for repo in (REPO_SSH, REPO_HTTPS):
-        cmd = [uvx, "--reinstall", "--from", repo, "quetta-agents-mcp", "--version"]
+        cmd = [uvx, "--refresh", "--from", repo, "quetta-agents-mcp", "--version"]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -602,5 +602,14 @@ async def main():
         )
 
 
-if __name__ == "__main__":
+def cli_main():
+    """Sync entry point for uvx/pip install."""
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--version":
+        print(f"quetta-agents-mcp {VERSION}")
+        return
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli_main()
