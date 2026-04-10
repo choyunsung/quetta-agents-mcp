@@ -93,6 +93,12 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 | `quetta_routing_info` | 쿼리가 어떤 모델로 라우팅될지 미리 확인 |
 | `quetta_list_agents` | 등록된 전문 에이전트 목록 조회 |
 | `quetta_run_agent` | 특정 에이전트에게 태스크 위임 |
+| `quetta_remote_connect` | 원격 에이전트 연결 확인 (설치 링크 제공) |
+| `quetta_remote_screenshot` | 원격 PC 화면 캡처 (Claude가 화면을 보고 제어) |
+| `quetta_remote_click` | 원격 PC 마우스 클릭 |
+| `quetta_remote_type` | 원격 PC 텍스트 입력 |
+| `quetta_remote_key` | 원격 PC 단축키 입력 (ctrl+c, alt+tab 등) |
+| `quetta_remote_shell` | 원격 PC 셸 명령어 실행 (GPU 학습, 파일 관리 등) |
 | `quetta_analyze_file` | 파일 업로드 → 유형 자동 감지(medical/signal/document) → RAG 인제스트 → AI 분석 |
 | `quetta_upload_file` | 파일 또는 텍스트를 서버에 업로드 (TUS 프로토콜, 대용량 지원) |
 | `quetta_upload_list` | 업로드된 파일 목록 조회 |
@@ -115,3 +121,5 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 | `QUETTA_RAG_URL` | `http://localhost:8400` | RAG API 서버 주소 |
 | `QUETTA_TUSD_TOKEN` | _(없음)_ | tusd X-API-Token (nginx 경유 외부 접근 시) |
 | `QUETTA_RAG_KEY` | `rag-claude-key-2026` | RAG API X-API-Key |
+| `QUETTA_REMOTE_AGENT_URL` | _(없음)_ | 원격 에이전트 주소 (예: `http://GPU_PC_IP:7701`) |
+| `QUETTA_REMOTE_AGENT_TOKEN` | _(없음)_ | 원격 에이전트 인증 토큰 |
