@@ -6,13 +6,13 @@
 
 set -e
 
-REPO="git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
-SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+REPO_HTTPS="git+https://github.com/choyunsung/quetta-agents-mcp"
+REPO_SSH="git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 GATEWAY_URL="${QUETTA_GATEWAY_URL:-https://rag.quetta-soft.com}"
 API_KEY="${QUETTA_API_KEY:-}"
 TIMEOUT="${QUETTA_TIMEOUT:-300}"
+SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
 
-# ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${CYAN}▶ $*${NC}"; }
 success() { echo -e "${GREEN}✓ $*${NC}"; }
@@ -30,6 +30,8 @@ if ! command -v uvx &>/dev/null; then
     info "uvx not found — installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
+    # Mac Homebrew path
+    [ -x "/opt/homebrew/bin/uvx" ] && export PATH="/opt/homebrew/bin:$PATH"
     if ! command -v uvx &>/dev/null; then
         error "uv install failed. Install manually: https://docs.astral.sh/uv/getting-started/installation/"
     fi
@@ -38,78 +40,111 @@ else
     success "uv found ($(uvx --version 2>&1 | head -1))"
 fi
 
-# ── 2. Verify the package installs ───────────────────────────────────────────
-info "Verifying package from GitHub..."
-if uvx --from "$REPO" quetta-agents-mcp --help &>/dev/null 2>&1; then
-    success "Package OK"
+UVX_PATH=$(command -v uvx)
+
+# ── 2. Pick working repo URL (HTTPS first for Mac/public access) ─────────────
+info "Verifying package install..."
+REPO=""
+if $UVX_PATH --from "$REPO_HTTPS" quetta-agents-mcp --version &>/dev/null; then
+    REPO="$REPO_HTTPS"
+    success "HTTPS repo accessible"
+elif $UVX_PATH --from "$REPO_SSH" quetta-agents-mcp --version &>/dev/null; then
+    REPO="$REPO_SSH"
+    success "SSH repo accessible"
 else
-    # stdio MCP servers exit immediately without args — that's expected
-    success "Package installed"
+    error "Cannot install from GitHub. Check network or GitHub access."
 fi
 
-# ── 3. Prompt for config if not set ──────────────────────────────────────────
+# ── 3. Prompt for config if not set and stdin is a TTY ────────────────────────
 if [ -z "$API_KEY" ] && [ -t 0 ]; then
     echo ""
-    echo -e "${YELLOW}Gateway URL [${GATEWAY_URL}]: ${NC}\c"
+    printf "${YELLOW}Gateway URL [${GATEWAY_URL}]: ${NC}"
     read -r input_url
     [ -n "$input_url" ] && GATEWAY_URL="$input_url"
 
-    echo -e "${YELLOW}API Key (leave empty for local/no-auth): ${NC}\c"
+    printf "${YELLOW}API Key (empty for local/no-auth): ${NC}"
     read -rs input_key
     echo ""
     [ -n "$input_key" ] && API_KEY="$input_key"
 fi
 
-# ── 4. Update ~/.claude/settings.json ─────────────────────────────────────────
-info "Updating $SETTINGS ..."
-mkdir -p "$(dirname "$SETTINGS")"
+ORCH_URL="${GATEWAY_URL%/}/orchestrator"
 
-# Create settings.json if it doesn't exist
-if [ ! -f "$SETTINGS" ]; then
-    echo '{}' > "$SETTINGS"
-fi
+# ── 4. Register with Claude Code ─────────────────────────────────────────────
+# Prefer `claude mcp add-json` (official CLI method — works for both Mac and Linux)
+# Fall back to direct settings.json edit.
 
-# Use Python to safely merge JSON (always available where Claude Code runs)
-python3 - "$SETTINGS" "$REPO" "$GATEWAY_URL" "$API_KEY" "$TIMEOUT" << 'PYEOF'
+REGISTERED=""
+
+if command -v claude &>/dev/null; then
+    info "Registering via 'claude mcp add-json' (user scope)..."
+
+    # Remove existing entry to avoid conflict
+    claude mcp remove quetta-agents --scope user &>/dev/null || true
+
+    JSON=$(python3 - "$UVX_PATH" "$REPO" "$GATEWAY_URL" "$ORCH_URL" "$API_KEY" "$TIMEOUT" <<'PYEOF'
 import json, sys
-
-settings_path = sys.argv[1]
-repo          = sys.argv[2]
-gateway_url   = sys.argv[3]
-api_key       = sys.argv[4]
-timeout       = sys.argv[5]
-
-with open(settings_path) as f:
-    cfg = json.load(f)
-
-cfg.setdefault("mcpServers", {})["quetta-agents"] = {
-    "command": "uvx",
+uvx, repo, gw, orch, key, to = sys.argv[1:7]
+config = {
+    "command": uvx,
     "args": ["--from", repo, "quetta-agents-mcp"],
     "env": {
-        "QUETTA_GATEWAY_URL":      gateway_url,
-        "QUETTA_ORCHESTRATOR_URL": gateway_url.rstrip("/") + "/orchestrator",
-        "QUETTA_API_KEY":          api_key,
-        "QUETTA_TIMEOUT":          timeout,
+        "QUETTA_GATEWAY_URL":      gw,
+        "QUETTA_ORCHESTRATOR_URL": orch,
+        "QUETTA_API_KEY":          key,
+        "QUETTA_TIMEOUT":          to,
     },
 }
-
-with open(settings_path, "w") as f:
-    json.dump(cfg, f, indent=2, ensure_ascii=False)
-
-print("OK")
+print(json.dumps(config))
 PYEOF
+)
 
-success "settings.json updated"
+    if claude mcp add-json quetta-agents "$JSON" --scope user &>/dev/null; then
+        success "Registered via claude CLI (scope: user)"
+        REGISTERED="claude-cli"
+    else
+        warn "claude mcp add-json failed — falling back to settings.json edit"
+    fi
+fi
 
-# ── 5. Done ───────────────────────────────────────────────────────────────────
+if [ -z "$REGISTERED" ]; then
+    info "Updating $SETTINGS ..."
+    mkdir -p "$(dirname "$SETTINGS")"
+    [ ! -f "$SETTINGS" ] && echo '{}' > "$SETTINGS"
+
+    python3 - "$SETTINGS" "$UVX_PATH" "$REPO" "$GATEWAY_URL" "$ORCH_URL" "$API_KEY" "$TIMEOUT" <<'PYEOF'
+import json, sys
+settings, uvx, repo, gw, orch, key, to = sys.argv[1:8]
+with open(settings) as f:
+    cfg = json.load(f)
+cfg.setdefault("mcpServers", {})["quetta-agents"] = {
+    "command": uvx,
+    "args": ["--from", repo, "quetta-agents-mcp"],
+    "env": {
+        "QUETTA_GATEWAY_URL":      gw,
+        "QUETTA_ORCHESTRATOR_URL": orch,
+        "QUETTA_API_KEY":          key,
+        "QUETTA_TIMEOUT":          to,
+    },
+}
+with open(settings, "w") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+PYEOF
+    success "settings.json updated"
+    REGISTERED="settings-json"
+fi
+
+# ── 5. Done ──────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}   Installation complete!${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "  Gateway : ${CYAN}${GATEWAY_URL}${NC}"
+echo -e "  Repo    : ${CYAN}${REPO}${NC}"
 echo -e "  Auth    : ${CYAN}$([ -n "$API_KEY" ] && echo "API key set" || echo "none (local)")${NC}"
-echo -e "  Config  : ${CYAN}${SETTINGS}${NC}"
+echo -e "  Method  : ${CYAN}${REGISTERED}${NC}"
 echo ""
-echo -e "  ${YELLOW}Restart Claude Code to activate the MCP server.${NC}"
+echo -e "  ${YELLOW}Verify:${NC}   claude mcp list | grep quetta"
+echo -e "  ${YELLOW}Restart:${NC}  restart Claude Code to load the MCP."
 echo ""
