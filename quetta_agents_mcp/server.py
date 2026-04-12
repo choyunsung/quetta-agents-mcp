@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.8.0"
+VERSION          = "0.9.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -70,6 +70,11 @@ RAG_KEY          = os.getenv("QUETTA_RAG_KEY",    "rag-claude-key-2026")     # X
 # 원격 에이전트 (릴레이 방식 — 에이전트가 게이트웨이에 역방향 WebSocket 연결)
 # QUETTA_REMOTE_AGENT_ID: 연결된 에이전트 ID (quetta_remote_connect 로 확인)
 REMOTE_AGENT_ID = os.getenv("QUETTA_REMOTE_AGENT_ID", "")
+
+# 논문 분석 (Nougat + Gemini Vision)
+GOOGLE_API_KEY  = os.getenv("GOOGLE_API_KEY",  os.getenv("GEMINI_API_KEY", ""))
+GEMINI_MODEL    = os.getenv("GEMINI_MODEL",    "gemini-2.0-flash-exp")
+NOUGAT_REPO     = os.getenv("NOUGAT_REPO",     "git+https://github.com/choyunsung/nougat")
 
 server = Server("quetta-agents")
 
@@ -336,9 +341,151 @@ def format_response(data: dict) -> str:
 
 # ─── Update helpers ───────────────────────────────────────────────────────────
 
+# ── 논문 분석 파이프라인 (Nougat + Gemini + Claude) ────────────────────────────
+
+async def _nougat_is_installed(agent_id: str) -> bool:
+    r = await _relay(agent_id, "shell", {
+        "command": 'python -c "import nougat; print(nougat.__version__)" 2>&1 || python -c "from nougat_ocr import predict" 2>&1',
+        "timeout": 30,
+    }, timeout=35)
+    stdout = (r.get("data", {}).get("stdout", "") + r.get("data", {}).get("stderr", "")).lower()
+    return "error" not in stdout and "traceback" not in stdout and "no module" not in stdout
+
+
+async def _install_nougat_on_agent(agent_id: str) -> str:
+    """GPU 에이전트에 nougat 설치. 결과 로그 반환."""
+    # nougat-ocr 패키지(사용자 fork) 설치 — GPU torch 가정
+    cmd = f"python -m pip install -q --upgrade {NOUGAT_REPO}"
+    r = await _relay(agent_id, "shell", {"command": cmd, "timeout": 900}, timeout=910)
+    out = r.get("data", {})
+    return f"rc={out.get('returncode','?')}  stderr={out.get('stderr','')[:500]}"
+
+
+async def _run_nougat_on_agent(agent_id: str, pdf_url: str, pdf_token: str = "") -> str:
+    """GPU 에이전트에서 PDF URL 다운로드 → nougat 실행 → 결과 mmd 반환."""
+    # 작업 디렉토리 준비 + PDF 다운로드
+    tok_hdr = f'-H "X-API-Token: {pdf_token}"' if pdf_token else ""
+    setup = (
+        "mkdir -p /tmp/quetta_paper && cd /tmp/quetta_paper && "
+        "rm -rf input output && mkdir input output && "
+        f'curl -fsSL {tok_hdr} "{pdf_url}" -o input/paper.pdf && '
+        "ls -la input/"
+    )
+    r = await _relay(agent_id, "shell", {"command": setup, "timeout": 300}, timeout=310)
+    data = r.get("data", {})
+    if data.get("returncode") != 0:
+        raise RuntimeError(f"PDF 다운로드 실패: {data.get('stderr','')}")
+
+    # nougat 실행 (CLI: nougat <pdf> -o <out_dir>)
+    run = (
+        "cd /tmp/quetta_paper && "
+        "nougat input/paper.pdf -o output/ --no-skipping 2>&1 | tail -30 && "
+        "echo --- && "
+        "ls output/ && echo --- && "
+        "cat output/paper.mmd 2>/dev/null || cat output/*.mmd 2>/dev/null"
+    )
+    r = await _relay(agent_id, "shell", {"command": run, "timeout": 1800}, timeout=1810)
+    data = r.get("data", {})
+    out = data.get("stdout", "")
+    # '---' 이후의 내용이 mmd 본문
+    parts = out.split("---")
+    return parts[-1].strip() if len(parts) >= 3 else out
+
+
+async def _gemini_analyze_pdf(pdf_bytes: bytes, query: str = "") -> str:
+    """Gemini File API로 PDF 전송 → 이미지/수식/도표 분석."""
+    if not GOOGLE_API_KEY:
+        return "_(Gemini 건너뜀 — GOOGLE_API_KEY 미설정)_"
+
+    prompt = (
+        "다음 논문 PDF의 **그림·도표·수식·알고리즘 다이어그램**을 중심으로 분석해주세요.\n"
+        "- 각 Figure/Table의 제목과 핵심 메시지\n"
+        "- 주요 수식의 의미와 변수 정의\n"
+        "- 시각적 요소(아키텍처, 플로우차트, 결과 그래프)의 해석\n"
+        "- 본문과 그림의 관계\n"
+    )
+    if query:
+        prompt += f"\n추가 초점: {query}\n"
+
+    async with httpx.AsyncClient(timeout=300) as client:
+        # inline_data 방식 (≤20MB): base64
+        b64 = base64.b64encode(pdf_bytes).decode()
+        resp = await client.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+            params={"key": GOOGLE_API_KEY},
+            json={
+                "contents": [{
+                    "parts": [
+                        {"inline_data": {"mime_type": "application/pdf", "data": b64}},
+                        {"text": prompt},
+                    ],
+                }],
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 8192},
+            },
+        )
+        if resp.status_code != 200:
+            return f"_(Gemini 실패 {resp.status_code}: {resp.text[:300]})_"
+        data = resp.json()
+        cands = data.get("candidates", [])
+        if not cands:
+            return "_(Gemini 응답 없음)_"
+        parts = cands[0].get("content", {}).get("parts", [])
+        return "\n".join(p.get("text", "") for p in parts).strip()
+
+
+async def _claude_synthesize_paper(
+    nougat_md: str,
+    gemini_analysis: str,
+    query: str = "",
+) -> str:
+    """Nougat 본문 + Gemini 시각 분석을 Claude로 종합 (게이트웨이 경유)."""
+    focus = f"\n사용자 초점: {query}" if query else ""
+    max_md = 120_000  # Claude 입력 한도 보호
+    nougat_clip = nougat_md[:max_md]
+    if len(nougat_md) > max_md:
+        nougat_clip += "\n\n[...본문 중 일부만 포함됨...]"
+
+    system = (
+        "당신은 학술 논문 심층 분석 전문가입니다. "
+        "Nougat(OCR)로 추출된 본문과 Gemini의 시각 분석을 통합해 "
+        "독자가 논문을 완벽히 이해할 수 있도록 설명하세요."
+    )
+    user = f"""다음 자료를 종합해 논문을 분석하세요.
+
+=== 1. Nougat 추출 본문 (수식·구조 보존) ===
+{nougat_clip}
+
+=== 2. Gemini 시각 분석 (그림·수식·도표) ===
+{gemini_analysis}
+
+=== 분석 요구사항 ===
+1. **제목 / 저자 / 소속 / 학회지**
+2. **초록 한글 요약**
+3. **핵심 기여(Contributions)** — 3~5개 불릿
+4. **방법론(Method)** — 수식과 함께 단계별 설명
+5. **실험 / 결과** — 주요 수치와 비교 대상
+6. **한계 / 향후 연구**
+7. **이 논문을 100% 이해하려면 주목할 부분**{focus}
+
+한글로 상세하게 작성하세요."""
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user",   "content": user},
+    ]
+    data = await gateway_chat(messages, model="claude-sonnet")
+    return format_response(data)
+
+
 # ── Intent Classification (스마트 디스패처) ────────────────────────────────────
 
 _INTENT_RULES = {
+    "paper_analysis": [
+        "논문 분석", "논문을 분석", "논문 해석", "paper analysis",
+        "pdf 분석", ".pdf", "arxiv", "학술 논문", "paper review",
+        "nougat", "수식 포함", "학술지", "abstract", "저자 소속",
+        "figure 분석", "table 해석",
+    ],
     "gpu_compute": [
         "gpu", "cuda", "torch", "tensorflow", "pytorch", "nvidia-smi",
         "학습", "훈련", "추론", "finetune", "fine-tune", "epoch",
@@ -382,7 +529,7 @@ def _classify_intent(text: str) -> tuple[str, list[str]]:
              > medical > code > multi_agent > question (기본값)
     """
     low = text.lower()
-    priority = ["gpu_compute", "screenshot", "remote_shell",
+    priority = ["paper_analysis", "gpu_compute", "screenshot", "remote_shell",
                 "file_analysis", "medical", "code", "multi_agent"]
     for intent in priority:
         matched = [kw for kw in _INTENT_RULES[intent] if kw in low]
@@ -785,6 +932,39 @@ async def list_tools() -> list[Tool]:
                 "GPU 자원 계획/모니터링 용도."
             ),
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="quetta_analyze_paper",
+            description=(
+                "**학술 논문 완벽 분석** — Nougat (OCR, GPU) + Gemini Vision + Claude 종합 파이프라인.\n\n"
+                "1. **Nougat**: PDF → 수식·표·구조가 보존된 고품질 Markdown (GPU 에이전트에서 실행)\n"
+                "2. **Gemini**: PDF 그대로 vision 분석 — Figure/Table/수식 시각 해석\n"
+                "3. **Claude**: 두 결과를 통합해 논문을 완전히 이해할 수 있는 한글 분석 리포트 생성\n\n"
+                "입력 방법 (둘 중 하나):\n"
+                "  - `file_path`: 서버 로컬 PDF 경로\n"
+                "  - `file_id`: `quetta_upload_file` 로 이미 업로드된 PDF ID\n\n"
+                "GPU 에이전트 미연결 시 자동으로 설치 링크 유도.\n"
+                "GOOGLE_API_KEY 미설정 시 Gemini 단계는 건너뜀."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "default": "",
+                                  "description": "서버 로컬 PDF 경로 (또는 file_id 사용)"},
+                    "file_id":   {"type": "string", "default": "",
+                                  "description": "업로드된 PDF의 TUS file_id"},
+                    "query":     {"type": "string", "default": "",
+                                  "description": "(선택) 집중해서 분석할 초점 (예: '저자의 데이터셋 구성법')"},
+                    "agent_id":  {"type": "string", "default": "",
+                                  "description": "(선택) 사용할 GPU 에이전트 ID — 미지정 시 자동 선택"},
+                    "install_nougat": {"type": "boolean", "default": True,
+                                        "description": "nougat 미설치 시 자동 설치 여부"},
+                    "skip_gemini":    {"type": "boolean", "default": False,
+                                        "description": "Gemini 단계 건너뛰기"},
+                    "skip_claude":    {"type": "boolean", "default": False,
+                                        "description": "Claude 종합 단계 건너뛰기 (nougat + gemini만)"},
+                },
+            },
         ),
         Tool(
             name="quetta_auto",
@@ -1351,6 +1531,110 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if stderr: lines += ["_stderr:_", "```", stderr.strip()[-2000:], "```"]
         return [TextContent(type="text", text="\n".join(lines))]
 
+    # ── quetta_analyze_paper (Nougat + Gemini + Claude) ───────────────────────
+    elif name == "quetta_analyze_paper":
+        file_path = arguments.get("file_path", "").strip()
+        file_id   = arguments.get("file_id", "").strip()
+        query     = arguments.get("query", "")
+        do_install = arguments.get("install_nougat", True)
+        skip_gemini = arguments.get("skip_gemini", False)
+        skip_claude = arguments.get("skip_claude", False)
+
+        if not file_path and not file_id:
+            return [TextContent(type="text", text="❌ `file_path` 또는 `file_id` 중 하나는 필수입니다.")]
+
+        # 1) 파일 준비 → file_id 확보 (로컬 경로면 업로드)
+        pdf_bytes: bytes = b""
+        progress = ["## 📄 논문 분석 파이프라인"]
+
+        if file_path:
+            try:
+                with open(file_path, "rb") as f:
+                    pdf_bytes = f.read()
+            except Exception as e:
+                return [TextContent(type="text", text=f"❌ 파일 읽기 실패: {e}")]
+            fname = file_path.rsplit("/", 1)[-1]
+            progress.append(f"**1/4**  파일 로드: `{fname}` ({len(pdf_bytes):,} bytes)")
+            # TUS 업로드 → file_id
+            file_id = await _tus_upload(fname, pdf_bytes)
+            progress.append(f"**2/4**  TUS 업로드 완료: `{file_id}`")
+        else:
+            # file_id만 있음 → RAG에서 파일 정보 조회 + 다운로드
+            async with httpx.AsyncClient(timeout=60) as c:
+                info = await c.get(f"{RAG_URL}/upload/files/{file_id}", headers=_rag_headers())
+                info.raise_for_status()
+                meta = info.json()
+            progress.append(f"**1/4**  기존 파일: `{meta.get('filename','?')}` ({meta.get('size',0):,} bytes)")
+            # tusd 원본 다운로드 (Gemini 전달용)
+            dl_url = f"{TUSD_URL.rstrip('/')}/files/{file_id}"
+            async with httpx.AsyncClient(timeout=120) as c:
+                resp = await c.get(dl_url, headers=_tusd_headers())
+                resp.raise_for_status()
+                pdf_bytes = resp.content
+            progress.append(f"**2/4**  파일 내려받음 ({len(pdf_bytes):,} bytes)")
+
+        # 2) Nougat on GPU agent
+        aid = await _pick_agent({"agent_id": arguments.get("agent_id", "")}, prefer_gpu=True)
+        progress.append(f"**3/4**  GPU 에이전트 선택: `{aid}`")
+
+        # PDF URL (에이전트가 다운로드할 경로) — TUSD_URL 사용
+        pdf_url   = f"{TUSD_URL.rstrip('/')}/files/{file_id}"
+        pdf_token = TUSD_TOKEN
+
+        # nougat 설치 확인/설치
+        if do_install:
+            if not await _nougat_is_installed(aid):
+                progress.append(f"  → nougat 미설치 → 설치 중... (최대 15분)")
+                log = await _install_nougat_on_agent(aid)
+                progress.append(f"  → 설치 완료: {log}")
+
+        # 실행
+        try:
+            nougat_md = await _run_nougat_on_agent(aid, pdf_url, pdf_token)
+            progress.append(f"  → nougat 추출 완료: {len(nougat_md):,} chars")
+        except Exception as e:
+            nougat_md = f"_(Nougat 실행 실패: {e})_"
+            progress.append(f"  → ❌ nougat 실패: {e}")
+
+        # 3) Gemini Vision
+        gemini_out = ""
+        if not skip_gemini and GOOGLE_API_KEY:
+            try:
+                # Gemini inline_data 한도 ≈ 20MB
+                if len(pdf_bytes) > 20 * 1024 * 1024:
+                    gemini_out = "_(PDF가 20MB 초과 — Gemini 건너뜀)_"
+                else:
+                    gemini_out = await _gemini_analyze_pdf(pdf_bytes, query)
+                progress.append(f"**4/4**  Gemini 분석 완료: {len(gemini_out):,} chars")
+            except Exception as e:
+                gemini_out = f"_(Gemini 실패: {e})_"
+                progress.append(f"**4/4**  ❌ Gemini 실패: {e}")
+        elif skip_gemini:
+            progress.append(f"**4/4**  Gemini 건너뜀 (skip_gemini=True)")
+        else:
+            progress.append(f"**4/4**  Gemini 건너뜀 (GOOGLE_API_KEY 미설정)")
+
+        # 4) Claude 종합
+        if skip_claude:
+            synthesis = "_(Claude 종합 건너뜀)_"
+        else:
+            try:
+                synthesis = await _claude_synthesize_paper(nougat_md, gemini_out, query)
+            except Exception as e:
+                synthesis = f"_(Claude 종합 실패: {e})_"
+
+        # 5) 최종 출력
+        final = "\n".join(progress) + "\n\n---\n\n"
+        final += "## 🎯 종합 분석 (Claude)\n\n" + synthesis + "\n\n---\n\n"
+        final += "<details><summary>🔍 Nougat 원본 추출 (접어서 보기)</summary>\n\n```markdown\n"
+        final += nougat_md[:8000] + ("\n\n[...이하 생략...]" if len(nougat_md) > 8000 else "")
+        final += "\n```\n</details>\n\n"
+        if gemini_out and "건너뜀" not in gemini_out[:30]:
+            final += "<details><summary>👁 Gemini 시각 분석 (접어서 보기)</summary>\n\n"
+            final += gemini_out[:6000] + "\n\n</details>\n"
+
+        return [TextContent(type="text", text=final)]
+
     # ── quetta_auto (스마트 디스패처) ─────────────────────────────────────────
     elif name == "quetta_auto":
         req       = arguments["request"]
@@ -1368,7 +1652,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         # 의도별 내부 dispatch
         try:
-            if intent == "gpu_compute":
+            if intent == "paper_analysis":
+                inner_args = {"query": req}
+                if file_path: inner_args["file_path"] = file_path
+                if agent_id:  inner_args["agent_id"]  = agent_id
+                result = await call_tool("quetta_analyze_paper", inner_args)
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "gpu_compute":
                 cmd = _extract_shell_command(req)
                 # agent_id 전달 시 해당 에이전트에 실행, 없으면 자동 GPU 선택
                 inner_args = {"command": cmd, "timeout": 600}

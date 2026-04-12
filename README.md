@@ -166,6 +166,36 @@ quetta_auto(request="이 파일 분석해줘", file_path="/data/patient.csv")
 4. GPU 에이전트 없음 → 설치 링크 반환 후 에러
 5. 에이전트 1개만 연결 → 자동 선택
 
+### 📑 논문 완벽 분석 (Nougat + Gemini + Claude)
+
+| 도구 | 설명 |
+|------|------|
+| `quetta_analyze_paper` | PDF를 **Nougat(OCR) + Gemini(Vision) + Claude(종합)** 3단 파이프라인으로 완벽 이해 |
+
+**파이프라인:**
+1. **Nougat** (GPU 에이전트): PDF → 수식·표·구조가 보존된 고품질 Markdown (`choyunsung/nougat` fork 사용)
+2. **Gemini Vision**: PDF 원본을 직접 분석해 Figure/Table/수식 시각 해석
+3. **Claude**: 두 결과 통합 → 제목/초록/방법론/결과/한계까지 상세 한글 분석
+
+**사용 예시:**
+```python
+# 로컬 PDF 분석 (서버 경로)
+quetta_analyze_paper(file_path="/data/papers/attention.pdf")
+
+# 이미 업로드된 PDF 분석 (file_id)
+quetta_analyze_paper(file_id="abc123", query="제안된 attention mechanism의 수식 유도")
+
+# Gemini 건너뛰고 빠르게
+quetta_analyze_paper(file_path="/data/paper.pdf", skip_gemini=True)
+
+# 자연어 호출 (quetta_auto가 자동 라우팅)
+quetta_auto(request="이 논문 분석해줘", file_path="/data/paper.pdf")
+```
+
+**필요 환경:**
+- GPU 에이전트 연결 (nougat는 torch + CUDA 필요) — 자동 설치 옵션 제공
+- `GOOGLE_API_KEY` 환경변수 (Gemini 사용 시) — 미설정이어도 Nougat+Claude만으로 동작
+
 ### 📁 파일 업로드 & 분석
 
 | 도구 | 설명 |
@@ -372,12 +402,21 @@ quetta_upload_process_all()                            # 미처리 파일 일괄
 | `QUETTA_TUSD_TOKEN` | _(없음)_ | tusd X-API-Token (nginx 경유 외부 접근 시) |
 | `QUETTA_RAG_KEY` | `rag-claude-key-2026` | RAG API X-API-Key |
 | `QUETTA_REMOTE_AGENT_ID` | _(없음)_ | 기본 원격 에이전트 ID (미지정 시 자동 선택) |
+| `GOOGLE_API_KEY` | _(없음)_ | Gemini Vision API 키 (`quetta_analyze_paper` 논문 그림 분석용) |
+| `GEMINI_MODEL` | `gemini-2.0-flash-exp` | 사용할 Gemini 모델 |
+| `NOUGAT_REPO` | `git+https://github.com/choyunsung/nougat` | nougat 설치 출처 |
 
 ---
 
 ## 변경 이력
 
-### v0.8.0 (최신)
+### v0.9.0 (최신)
+- **논문 완벽 분석** `quetta_analyze_paper` 추가
+- Nougat (GPU OCR) + Gemini Vision + Claude 3단 파이프라인
+- `quetta_auto` 에 paper_analysis 의도 추가 (최상위 우선순위)
+- 환경변수: `GOOGLE_API_KEY`, `GEMINI_MODEL`, `NOUGAT_REPO`
+
+### v0.8.0
 - **스마트 디스패처** `quetta_auto` 추가 — 자연어 요청을 자동 분류해 적절한 도구로 라우팅
 - 의도 분류 7종: `gpu_compute` / `screenshot` / `remote_shell` / `file_analysis` / `medical` / `code` / `multi_agent` / `question`
 - `dry_run` 모드: 실제 실행 없이 분류 결과만 확인
