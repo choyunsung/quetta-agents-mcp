@@ -107,6 +107,23 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 | `quetta_remote_key` | 원격 PC 단축키 입력 (`ctrl+c`, `alt+tab` 등) |
 | `quetta_remote_shell` | 원격 PC 셸 명령어 실행 (GPU 키워드 자동 감지 → GPU 에이전트) |
 
+### 스마트 디스패처 (자동 의도 파악)
+
+| 도구 | 설명 |
+|------|------|
+| `quetta_auto` | 요청을 분석해 자동으로 적절한 도구/모델/에이전트로 라우팅 |
+
+**동작 예시:**
+- `"nvidia-smi 실행해줘"` → `quetta_gpu_exec` (GPU 에이전트 자동 선택)
+- `"화면 캡처해줘"` → `quetta_remote_screenshot`
+- `"환자 ICD 코드 알려줘"` → `quetta_medical` (DeepSeek-R1)
+- `"리팩토링 해줘"` → `quetta_code` (Gemma4 + skills)
+- `"전체 시스템 아키텍처 설계해줘"` → `quetta_multi_agent` (SCION 병렬)
+- `"python train.py 돌려줘"` → `quetta_gpu_exec`
+- 기타 일반 질문 → `quetta_ask` (Gemma4/Claude 자동)
+
+`dry_run=true` 옵션으로 실제 실행 없이 분류 결과만 확인 가능.
+
 ### GPU 자동 라우팅
 
 | 도구 | 설명 |

@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.7.0"
+VERSION          = "0.8.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -335,6 +335,77 @@ def format_response(data: dict) -> str:
 
 
 # ─── Update helpers ───────────────────────────────────────────────────────────
+
+# ── Intent Classification (스마트 디스패처) ────────────────────────────────────
+
+_INTENT_RULES = {
+    "gpu_compute": [
+        "gpu", "cuda", "torch", "tensorflow", "pytorch", "nvidia-smi",
+        "학습", "훈련", "추론", "finetune", "fine-tune", "epoch",
+        "train.py", "inference.py", "transformers", "diffusers",
+        "stable diffusion", "whisper", "llama.cpp", "vllm",
+        "모델 돌", "모델을 돌", "ml 작업", "딥러닝",
+    ],
+    "screenshot": [
+        "스크린샷", "screenshot", "화면 캡처", "화면캡처", "화면 보여",
+        "화면 좀", "screen capture", "화면을 보",
+    ],
+    "remote_shell": [
+        "원격에서", "원격 pc에서", "원격에 ", "원격 셸", "원격 명령",
+        "원격 실행", "remote shell", "ssh 로", "원격 컴퓨터",
+    ],
+    "file_analysis": [
+        "파일 분석", "문서 분석", "의료 데이터", "분석해", "업로드해",
+        "analyze file", ".pdf", ".csv", ".xlsx", ".edf", ".mat",
+        "환자 데이터", "리포트 분석",
+    ],
+    "medical": [
+        "진단", "임상", "icd", "fhir", "의학", "증상", "처방", "약물",
+        "diagnosis", "clinical", "patient", "환자", "병력", "치료",
+    ],
+    "code": [
+        "코드 리뷰", "리팩토링", "refactor", "버그 수정", "fix bug",
+        "구현해", "함수 작성", "class ", "알고리즘 구현",
+        "코드 작성", "작성해줘 .*코드", "코딩", "프로그래밍",
+    ],
+    "multi_agent": [
+        "설계", "architecture", "아키텍처", "전체 구성", "시스템 설계",
+        "복잡한", "여러 관점", "multi-step", "step by step 깊이",
+    ],
+}
+
+
+def _classify_intent(text: str) -> tuple[str, list[str]]:
+    """사용자 요청을 분류. 반환: (best_intent, matched_keywords).
+
+    우선순위: gpu_compute > screenshot > remote_shell > file_analysis
+             > medical > code > multi_agent > question (기본값)
+    """
+    low = text.lower()
+    priority = ["gpu_compute", "screenshot", "remote_shell",
+                "file_analysis", "medical", "code", "multi_agent"]
+    for intent in priority:
+        matched = [kw for kw in _INTENT_RULES[intent] if kw in low]
+        if matched:
+            return intent, matched
+    return "question", []
+
+
+def _extract_shell_command(text: str) -> str:
+    """요청 텍스트에서 실행할 명령어 후보 추출.
+    1. 백틱 코드 블록
+    2. ``` 코드 펜스
+    3. 원본 그대로 반환
+    """
+    import re
+    m = re.search(r"```(?:\w+)?\s*\n?(.*?)```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"`([^`]+)`", text)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
 
 async def _run_update() -> tuple[bool, str]:
     """
@@ -714,6 +785,47 @@ async def list_tools() -> list[Tool]:
                 "GPU 자원 계획/모니터링 용도."
             ),
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="quetta_auto",
+            description=(
+                "**스마트 디스패처** — 사용자의 요청을 분석해 자동으로 적절한 도구/모델/에이전트로 라우팅합니다.\n\n"
+                "어떤 요청이든 이 도구에 넘기면 MCP가 자동 판단합니다:\n"
+                "  • GPU 계산 (CUDA/torch/학습/추론) → GPU 에이전트에서 실행\n"
+                "  • 화면 캡처 요청 → quetta_remote_screenshot\n"
+                "  • 원격 셸 명령 → quetta_remote_shell (GPU 키워드면 GPU 에이전트)\n"
+                "  • 파일/문서 분석 → quetta_analyze_file\n"
+                "  • 의료 질의 → DeepSeek-R1 임상 추론\n"
+                "  • 코드 작업 → Gemma4 + agent-skills\n"
+                "  • 아키텍처/복잡한 설계 → 멀티에이전트 (SCION)\n"
+                "  • 그 외 일반 질문 → Gemma4/Claude 자동 라우팅\n\n"
+                "불확실할 때의 기본 동작: LLM 게이트웨이의 자동 라우팅(`quetta_ask`)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "description": "자연어 요청 (한글/영문 자유). 원격 실행할 명령어를 백틱에 감쌀 수 있음.",
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "description": "(선택) 원격 에이전트 ID - GPU/remote 의도로 분류될 때 사용",
+                        "default": "",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "(선택) 파일 분석 의도일 때의 파일 경로",
+                        "default": "",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "true면 실행하지 않고 분류 결과·라우팅만 반환",
+                        "default": False,
+                    },
+                },
+                "required": ["request"],
+            },
         ),
         Tool(
             name="quetta_analyze_file",
@@ -1238,6 +1350,74 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if stdout: lines += ["```", stdout.strip()[-6000:], "```"]
         if stderr: lines += ["_stderr:_", "```", stderr.strip()[-2000:], "```"]
         return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_auto (스마트 디스패처) ─────────────────────────────────────────
+    elif name == "quetta_auto":
+        req       = arguments["request"]
+        agent_id  = arguments.get("agent_id", "")
+        file_path = arguments.get("file_path", "")
+        dry_run   = arguments.get("dry_run", False)
+
+        intent, matched = _classify_intent(req)
+        route_info = f"**[quetta_auto]** 의도: `{intent}`" + (
+            f"  |  매칭: `{', '.join(matched)}`" if matched else ""
+        )
+
+        if dry_run:
+            return [TextContent(type="text", text=route_info + "\n\n_(dry_run — 실행 생략)_")]
+
+        # 의도별 내부 dispatch
+        try:
+            if intent == "gpu_compute":
+                cmd = _extract_shell_command(req)
+                # agent_id 전달 시 해당 에이전트에 실행, 없으면 자동 GPU 선택
+                inner_args = {"command": cmd, "timeout": 600}
+                if agent_id:
+                    inner_args["agent_id"] = agent_id
+                result = await call_tool("quetta_gpu_exec", inner_args)
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "screenshot":
+                inner_args = {}
+                if agent_id: inner_args["agent_id"] = agent_id
+                result = await call_tool("quetta_remote_screenshot", inner_args)
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "remote_shell":
+                cmd = _extract_shell_command(req)
+                inner_args = {"command": cmd, "timeout": 60}
+                if agent_id: inner_args["agent_id"] = agent_id
+                result = await call_tool("quetta_remote_shell", inner_args)
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "file_analysis":
+                inner_args = {"query": req}
+                if file_path: inner_args["file_path"] = file_path
+                else:         inner_args["content"]   = req
+                result = await call_tool("quetta_analyze_file", inner_args)
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "medical":
+                result = await call_tool("quetta_medical", {"query": req})
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "code":
+                result = await call_tool("quetta_code", {"task": req})
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "multi_agent":
+                result = await call_tool("quetta_multi_agent", {"task": req})
+                return [TextContent(type="text", text=route_info), *result]
+
+            else:  # question (기본값)
+                result = await call_tool("quetta_ask", {"query": req})
+                return [TextContent(type="text", text=route_info), *result]
+
+        except Exception as e:
+            return [TextContent(
+                type="text",
+                text=f"{route_info}\n\n**실행 실패:** {e}"
+            )]
 
     # ── quetta_gpu_status ─────────────────────────────────────────────────────
     elif name == "quetta_gpu_status":
