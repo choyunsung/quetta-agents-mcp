@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.6.0"
+VERSION          = "0.7.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -128,6 +128,92 @@ def _active_agent_id(arguments: dict) -> str:
             "`quetta_remote_connect` 를 먼저 실행해 연결된 에이전트 ID를 확인하세요."
         )
     return aid
+
+
+# GPU 감지 키워드 (명령어에 포함되면 GPU 에이전트로 자동 라우팅)
+_GPU_KEYWORDS = (
+    "nvidia-smi", "cuda", "torch", "tensorflow", "tf.", "cupy",
+    "jax.", "transformers", "accelerate", "deepspeed", "vllm",
+    "ollama run", "llama.cpp", "onnxruntime-gpu", "mmdet", "yolov",
+    "train.py", "inference.py", "finetune", "sd-webui", "comfyui",
+    "whisper", "diffusers", "stable-diffusion",
+)
+
+
+def _needs_gpu(command: str) -> bool:
+    """명령어가 GPU 작업인지 추정."""
+    low = command.lower()
+    return any(kw in low for kw in _GPU_KEYWORDS)
+
+
+def _agent_has_gpu(agent: dict) -> bool:
+    """에이전트가 실제 GPU를 보유했는지 판별."""
+    gpu = (agent.get("gpu") or "").strip().lower()
+    if not gpu:
+        return False
+    # "없음 (CPU only)", "none", "cpu only" 제외
+    return not any(x in gpu for x in ("없음", "cpu only", "없 ", "none"))
+
+
+async def _find_gpu_agent() -> dict | None:
+    """연결된 에이전트 중 GPU 보유 에이전트 1개 선택 (가장 오래 연결된 것)."""
+    try:
+        agents = await _relay_get("/agent/agents")
+    except Exception:
+        return None
+    gpu_agents = [a for a in agents if _agent_has_gpu(a)]
+    if not gpu_agents:
+        return None
+    # 가장 오래 연결된 (안정적인) 에이전트 우선
+    gpu_agents.sort(key=lambda a: -a.get("connected_sec", 0))
+    return gpu_agents[0]
+
+
+async def _pick_agent(arguments: dict, prefer_gpu: bool = False) -> str:
+    """에이전트 ID 선택. prefer_gpu=True면 자동으로 GPU 에이전트 선택.
+
+    우선순위:
+      1. arguments.agent_id (명시적 지정)
+      2. prefer_gpu=True 또는 명령어에 GPU 키워드가 있으면 GPU 에이전트 자동 선택
+      3. REMOTE_AGENT_ID 환경변수
+      4. 예외
+    """
+    aid = arguments.get("agent_id", "").strip()
+    if aid:
+        return aid
+
+    auto_gpu = prefer_gpu or _needs_gpu(arguments.get("command", ""))
+    if auto_gpu:
+        gpu_agent = await _find_gpu_agent()
+        if gpu_agent:
+            return gpu_agent["id"]
+        # GPU 요구인데 GPU 에이전트가 없음 → 설치 링크 유도
+        try:
+            link = await _relay_get("/agent/install-link?os=linux")
+            url = link.get("url", "")
+        except Exception:
+            url = ""
+        raise ValueError(
+            "GPU가 필요한 작업이지만 연결된 GPU 에이전트가 없습니다.\n"
+            + (f"설치 링크: {url}\n" if url else "")
+            + "원격 PC에서 설치 후 재시도하세요 (`quetta_remote_connect` 로 상태 확인)."
+        )
+
+    if REMOTE_AGENT_ID:
+        return REMOTE_AGENT_ID
+
+    # 연결된 에이전트가 1개뿐이면 자동 선택
+    try:
+        agents = await _relay_get("/agent/agents")
+    except Exception:
+        agents = []
+    if len(agents) == 1:
+        return agents[0]["id"]
+
+    raise ValueError(
+        "agent_id 가 지정되지 않았습니다.\n"
+        "`quetta_remote_connect` 를 먼저 실행해 연결된 에이전트 ID를 확인하세요."
+    )
 
 
 def _rag_headers() -> dict:
@@ -549,7 +635,15 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="quetta_remote_shell",
-            description="원격 PC에서 셸 명령어를 실행하고 결과를 반환합니다. GPU 학습 실행, 파일 관리 등.",
+            description=(
+                "원격 PC에서 셸 명령어를 실행하고 결과를 반환합니다.\n\n"
+                "**자동 GPU 라우팅**: 명령어에 GPU 키워드(nvidia-smi, cuda, torch, train.py 등)가 포함되면\n"
+                "agent_id 미지정 시 자동으로 GPU 보유 에이전트를 선택합니다.\n\n"
+                "예시:\n"
+                "  - `nvidia-smi` → 자동으로 GPU 에이전트 선택\n"
+                "  - `python train.py` → 자동으로 GPU 에이전트 선택\n"
+                "  - 일반 셸 명령 → 기본 에이전트 (단일 연결 시 자동)"
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -557,9 +651,69 @@ async def list_tools() -> list[Tool]:
                     "command": {"type": "string", "description": "실행할 명령어"},
                     "timeout": {"type": "integer", "default": 30},
                     "cwd": {"type": "string", "default": ""},
+                    "prefer_gpu": {
+                        "type": "boolean",
+                        "description": "GPU 에이전트 우선 선택 (true면 키워드 없이도 강제 선택)",
+                        "default": False,
+                    },
                 },
                 "required": ["command"],
             },
+        ),
+        Tool(
+            name="quetta_gpu_exec",
+            description=(
+                "GPU가 필요한 명령을 자동으로 GPU 에이전트에서 실행합니다.\n\n"
+                "- agent_id 미지정 시: 연결된 GPU 에이전트 중 자동 선택\n"
+                "- GPU 에이전트가 없으면: 설치 링크 반환 후 에러\n"
+                "- `quetta_remote_shell` 과 동일하지만 GPU 필수\n\n"
+                "ML 학습, 추론, CUDA 샘플 실행 등에 사용하세요."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "실행할 셸 명령"},
+                    "agent_id": {"type": "string", "default": ""},
+                    "timeout": {"type": "integer", "default": 300},
+                    "cwd": {"type": "string", "default": ""},
+                },
+                "required": ["command"],
+            },
+        ),
+        Tool(
+            name="quetta_gpu_python",
+            description=(
+                "Python 코드를 GPU 에이전트에서 직접 실행합니다 (CUDA/torch/ML 작업용).\n\n"
+                "입력 코드는 원격 PC의 임시 파일로 저장된 뒤 python으로 실행됩니다.\n"
+                "stdout/stderr 를 모두 반환합니다.\n\n"
+                "예시 코드:\n"
+                "  import torch\n"
+                "  print(torch.cuda.is_available(), torch.cuda.device_count())\n"
+                "  print(torch.cuda.get_device_name(0))"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "실행할 Python 코드"},
+                    "agent_id": {"type": "string", "default": ""},
+                    "timeout": {"type": "integer", "default": 300},
+                    "python": {
+                        "type": "string",
+                        "description": "Python 실행 파일 (기본: 'python')",
+                        "default": "python",
+                    },
+                },
+                "required": ["code"],
+            },
+        ),
+        Tool(
+            name="quetta_gpu_status",
+            description=(
+                "연결된 모든 GPU 에이전트의 현재 상태를 요약합니다.\n"
+                "각 에이전트에서 `nvidia-smi` 를 실행해 GPU 이름·메모리·온도·사용률을 표로 반환.\n\n"
+                "GPU 자원 계획/모니터링 용도."
+            ),
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="quetta_analyze_file",
@@ -1020,7 +1174,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     # ── quetta_remote_shell ───────────────────────────────────────────────────
     elif name == "quetta_remote_shell":
-        aid  = _active_agent_id(arguments)
+        prefer_gpu = arguments.get("prefer_gpu", False)
+        aid  = await _pick_agent(arguments, prefer_gpu=prefer_gpu)
         tout = arguments.get("timeout", 30)
         data = await _relay(aid, "shell", {
             "command": arguments["command"],
@@ -1031,9 +1186,97 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         rc     = inner.get("returncode", -1)
         stdout = inner.get("stdout", "")
         stderr = inner.get("stderr", "")
-        lines  = [f"**`{arguments['command']}`** → rc={rc}"]
+        lines  = [f"**`{arguments['command']}`** → rc={rc}  _(agent: {aid})_"]
         if stdout: lines += ["```", stdout.strip()[-4000:], "```"]
         if stderr: lines += ["_stderr:_", "```", stderr.strip()[-1000:], "```"]
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_gpu_exec ───────────────────────────────────────────────────────
+    elif name == "quetta_gpu_exec":
+        aid  = await _pick_agent(arguments, prefer_gpu=True)
+        tout = arguments.get("timeout", 300)
+        data = await _relay(aid, "shell", {
+            "command": arguments["command"],
+            "timeout": tout,
+            "cwd": arguments.get("cwd") or None,
+        }, timeout=tout + 10)
+        inner  = data.get("data", data)
+        rc     = inner.get("returncode", -1)
+        stdout = inner.get("stdout", "")
+        stderr = inner.get("stderr", "")
+        lines  = [f"**[GPU]** `{arguments['command']}` → rc={rc}  _(agent: {aid})_"]
+        if stdout: lines += ["```", stdout.strip()[-6000:], "```"]
+        if stderr: lines += ["_stderr:_", "```", stderr.strip()[-2000:], "```"]
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_gpu_python ─────────────────────────────────────────────────────
+    elif name == "quetta_gpu_python":
+        aid     = await _pick_agent(arguments, prefer_gpu=True)
+        tout    = arguments.get("timeout", 300)
+        py_exe  = arguments.get("python", "python")
+        code    = arguments["code"]
+
+        # 원격 PC에 임시 파일로 저장 후 실행 (inline -c는 따옴표 이스케이프 지옥)
+        b64 = base64.b64encode(code.encode("utf-8")).decode()
+        # 모든 주요 OS에서 동작하는 단일 한 줄 스크립트
+        runner = (
+            f'{py_exe} -c "import base64,os,sys,tempfile;'
+            f'd=base64.b64decode(\'{b64}\');'
+            f'f=tempfile.NamedTemporaryFile(mode=\'wb\',suffix=\'.py\',delete=False);'
+            f'f.write(d);f.close();'
+            f'os.system(sys.executable+\' \'+f.name)"'
+        )
+        data = await _relay(aid, "shell", {
+            "command": runner,
+            "timeout": tout,
+        }, timeout=tout + 10)
+        inner  = data.get("data", data)
+        rc     = inner.get("returncode", -1)
+        stdout = inner.get("stdout", "")
+        stderr = inner.get("stderr", "")
+        lines  = [f"**[GPU Python]** rc={rc}  _(agent: {aid})_"]
+        if stdout: lines += ["```", stdout.strip()[-6000:], "```"]
+        if stderr: lines += ["_stderr:_", "```", stderr.strip()[-2000:], "```"]
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_gpu_status ─────────────────────────────────────────────────────
+    elif name == "quetta_gpu_status":
+        try:
+            agents = await _relay_get("/agent/agents")
+        except Exception as e:
+            return [TextContent(type="text", text=f"에이전트 목록 조회 실패: {e}")]
+
+        gpu_agents = [a for a in agents if _agent_has_gpu(a)]
+        if not gpu_agents:
+            return [TextContent(
+                type="text",
+                text="GPU 에이전트가 없습니다. `quetta_remote_connect(action='install-link')` 로 설치 링크를 받으세요."
+            )]
+
+        lines = ["## GPU 에이전트 상태", ""]
+        for ag in gpu_agents:
+            aid  = ag["id"]
+            host = ag.get("hostname", "?")
+            try:
+                r = await _relay(aid, "shell", {
+                    "command": "nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu,temperature.gpu --format=csv,noheader,nounits",
+                    "timeout": 15,
+                }, timeout=20)
+                smi = r.get("data", {}).get("stdout", "").strip()
+            except Exception as e:
+                smi = f"(조회 실패: {e})"
+
+            lines += [
+                f"### {host} (`{aid}`)",
+                f"- 선언된 GPU: {ag.get('gpu', '?')}",
+                f"- 연결 시간: {ag.get('connected_sec', 0)}초",
+                "",
+                "```",
+                "name, mem_used(MiB), mem_total(MiB), util(%), temp(C)",
+                smi or "(출력 없음)",
+                "```",
+                "",
+            ]
         return [TextContent(type="text", text="\n".join(lines))]
 
     # ── quetta_analyze_file ───────────────────────────────────────────────────

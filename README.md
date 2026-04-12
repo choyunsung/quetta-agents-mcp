@@ -105,7 +105,22 @@ curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master
 | `quetta_remote_click` | 원격 PC 마우스 클릭 (좌/우/더블클릭) |
 | `quetta_remote_type` | 원격 PC 텍스트 입력 (클립보드 경유) |
 | `quetta_remote_key` | 원격 PC 단축키 입력 (`ctrl+c`, `alt+tab` 등) |
-| `quetta_remote_shell` | 원격 PC 셸 명령어 실행 (GPU 학습, 파일 관리 등) |
+| `quetta_remote_shell` | 원격 PC 셸 명령어 실행 (GPU 키워드 자동 감지 → GPU 에이전트) |
+
+### GPU 자동 라우팅
+
+| 도구 | 설명 |
+|------|------|
+| `quetta_gpu_exec` | GPU 필요 명령을 자동으로 GPU 에이전트에서 실행 |
+| `quetta_gpu_python` | Python 코드를 GPU 에이전트에서 직접 실행 (torch/cuda 등) |
+| `quetta_gpu_status` | 연결된 GPU 에이전트 전체의 `nvidia-smi` 요약 |
+
+**자동 선택 로직:**
+1. `agent_id` 명시 → 해당 에이전트 사용
+2. 명령어에 GPU 키워드(`cuda`, `torch`, `nvidia-smi`, `train.py` 등) 포함 → 자동으로 GPU 에이전트 선택
+3. `prefer_gpu=True` → GPU 에이전트 강제 선택
+4. GPU 에이전트 없음 → 설치 링크 반환 후 에러
+5. 에이전트 1개만 연결 → 자동 선택
 
 ### 파일 업로드 & 분석
 
