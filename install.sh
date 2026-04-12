@@ -11,7 +11,26 @@ REPO_SSH="git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 GATEWAY_URL="${QUETTA_GATEWAY_URL:-https://rag.quetta-soft.com}"
 API_KEY="${QUETTA_API_KEY:-}"
 TIMEOUT="${QUETTA_TIMEOUT:-300}"
+RAG_URL="${QUETTA_RAG_URL:-}"
+TUSD_URL="${QUETTA_TUSD_URL:-}"
+TUSD_TOKEN="${QUETTA_TUSD_TOKEN:-}"
+RAG_KEY="${QUETTA_RAG_KEY:-rag-claude-key-2026}"
 SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+
+# GATEWAY_URL이 공개 URL(https)이고 파일 업로드 관련 변수가 비어있으면 자동 유도
+# (nginx가 /upload/ 와 /files/ 를 동일 도메인에서 프록시)
+if [[ "$GATEWAY_URL" =~ ^https:// ]]; then
+    [ -z "$RAG_URL" ]    && RAG_URL="$GATEWAY_URL"
+    [ -z "$TUSD_URL" ]   && TUSD_URL="$GATEWAY_URL"
+    # 기본 공개 TUSD 토큰 (rag.quetta-soft.com 전용) — 내부 서버에서는 외부 공용 토큰 사용
+    if [ -z "$TUSD_TOKEN" ] && [[ "$GATEWAY_URL" == *"rag.quetta-soft.com"* ]]; then
+        TUSD_TOKEN="70e1183fe64e1b6efd7ab0966cec24bad1419f17f7b6fe92e6daa685f4cbdf68"
+    fi
+else
+    # 로컬 게이트웨이 시나리오 → 로컬 기본값
+    [ -z "$RAG_URL" ]  && RAG_URL="http://localhost:8400"
+    [ -z "$TUSD_URL" ] && TUSD_URL="http://localhost:1080"
+fi
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${CYAN}▶ $*${NC}"; }
@@ -82,9 +101,9 @@ if command -v claude &>/dev/null; then
     # Remove existing entry to avoid conflict
     claude mcp remove quetta-agents --scope user &>/dev/null || true
 
-    JSON=$(python3 - "$UVX_PATH" "$REPO" "$GATEWAY_URL" "$ORCH_URL" "$API_KEY" "$TIMEOUT" <<'PYEOF'
+    JSON=$(python3 - "$UVX_PATH" "$REPO" "$GATEWAY_URL" "$ORCH_URL" "$API_KEY" "$TIMEOUT" "$RAG_URL" "$TUSD_URL" "$TUSD_TOKEN" "$RAG_KEY" <<'PYEOF'
 import json, sys
-uvx, repo, gw, orch, key, to = sys.argv[1:7]
+uvx, repo, gw, orch, key, to, rag, tusd, tusd_tok, rag_key = sys.argv[1:11]
 config = {
     "command": uvx,
     "args": ["--from", repo, "quetta-agents-mcp"],
@@ -93,6 +112,10 @@ config = {
         "QUETTA_ORCHESTRATOR_URL": orch,
         "QUETTA_API_KEY":          key,
         "QUETTA_TIMEOUT":          to,
+        "QUETTA_RAG_URL":          rag,
+        "QUETTA_TUSD_URL":         tusd,
+        "QUETTA_TUSD_TOKEN":       tusd_tok,
+        "QUETTA_RAG_KEY":          rag_key,
     },
 }
 print(json.dumps(config))
@@ -112,9 +135,9 @@ if [ -z "$REGISTERED" ]; then
     mkdir -p "$(dirname "$SETTINGS")"
     [ ! -f "$SETTINGS" ] && echo '{}' > "$SETTINGS"
 
-    python3 - "$SETTINGS" "$UVX_PATH" "$REPO" "$GATEWAY_URL" "$ORCH_URL" "$API_KEY" "$TIMEOUT" <<'PYEOF'
+    python3 - "$SETTINGS" "$UVX_PATH" "$REPO" "$GATEWAY_URL" "$ORCH_URL" "$API_KEY" "$TIMEOUT" "$RAG_URL" "$TUSD_URL" "$TUSD_TOKEN" "$RAG_KEY" <<'PYEOF'
 import json, sys
-settings, uvx, repo, gw, orch, key, to = sys.argv[1:8]
+settings, uvx, repo, gw, orch, key, to, rag, tusd, tusd_tok, rag_key = sys.argv[1:12]
 with open(settings) as f:
     cfg = json.load(f)
 cfg.setdefault("mcpServers", {})["quetta-agents"] = {
@@ -125,6 +148,10 @@ cfg.setdefault("mcpServers", {})["quetta-agents"] = {
         "QUETTA_ORCHESTRATOR_URL": orch,
         "QUETTA_API_KEY":          key,
         "QUETTA_TIMEOUT":          to,
+        "QUETTA_RAG_URL":          rag,
+        "QUETTA_TUSD_URL":         tusd,
+        "QUETTA_TUSD_TOKEN":       tusd_tok,
+        "QUETTA_RAG_KEY":          rag_key,
     },
 }
 with open(settings, "w") as f:
@@ -141,6 +168,8 @@ echo -e "${GREEN}   Installation complete!${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "  Gateway : ${CYAN}${GATEWAY_URL}${NC}"
+echo -e "  RAG     : ${CYAN}${RAG_URL}${NC}"
+echo -e "  tusd    : ${CYAN}${TUSD_URL} $([ -n "$TUSD_TOKEN" ] && echo "(token set)" || echo "(no token)")${NC}"
 echo -e "  Repo    : ${CYAN}${REPO}${NC}"
 echo -e "  Auth    : ${CYAN}$([ -n "$API_KEY" ] && echo "API key set" || echo "none (local)")${NC}"
 echo -e "  Method  : ${CYAN}${REGISTERED}${NC}"
