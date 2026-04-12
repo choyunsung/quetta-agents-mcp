@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.10.0"
+VERSION          = "0.11.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -392,6 +392,188 @@ async def _run_nougat_on_agent(agent_id: str, pdf_url: str, pdf_token: str = "")
     return parts[-1].strip() if len(parts) >= 3 else out
 
 
+# ── 설계도 분석 (기계/전기/CPLD PDF·PNG) ────────────────────────────────────
+
+_DRAWING_PROMPTS = {
+    "mechanical": (
+        "이 기계 설계도를 엔지니어 관점에서 상세히 분석하세요.\n"
+        "1. 도면 종류 (조립도/부품도/단면도/상세도)\n"
+        "2. 주요 치수·공차·표면거칠기(Ra)·끼워맞춤 기호\n"
+        "3. 재질·열처리·표면처리 기재사항\n"
+        "4. 각 부품의 기능과 조립 관계\n"
+        "5. GD&T(기하공차) 기호 해석 — ⊥, ⌒, ◎, ⊕, ↕ 등\n"
+        "6. 제작/가공 시 주의사항 (가공 순서·기준면)\n"
+        "7. BOM(부품표)이 있으면 항목별 정리\n"
+    ),
+    "electrical": (
+        "이 전기 설계도를 전기/제어 엔지니어 관점에서 상세히 분석하세요.\n"
+        "1. 회로 종류 (배전/제어/PLC I/O/시퀀스/단선결선도)\n"
+        "2. 주요 소자 (차단기, 계전기, 인버터, PLC, 센서) 목록·정격\n"
+        "3. 전원 계통 (전압·상·주파수)과 결선\n"
+        "4. 신호 흐름 — 입력/출력/인터록·안전회로\n"
+        "5. 부하/모터 용량·보호장치 설정\n"
+        "6. 단자번호·와이어 번호 규칙\n"
+        "7. 안전 관련 (ESTOP, 접지, 절연) 확인\n"
+    ),
+    "cpld": (
+        "이 CPLD/FPGA/디지털 설계도를 논리 설계자 관점에서 상세히 분석하세요.\n"
+        "1. 설계 유형 (RTL 블록도/스키매틱/타이밍도/상태천이도/핀맵)\n"
+        "2. 주요 모듈·서브 블록과 기능\n"
+        "3. 신호 이름·비트폭·방향(input/output/inout)\n"
+        "4. 클럭·리셋 계통 (동기/비동기, 클럭 도메인)\n"
+        "5. FSM 상태와 전이 조건 (있다면)\n"
+        "6. 인터페이스 프로토콜 (I2C/SPI/UART/AXI 등)\n"
+        "7. 타이밍 제약 (setup/hold, tPD) 및 합성 가능 여부\n"
+        "8. 가능하면 Verilog/VHDL 구조 유추\n"
+    ),
+    "auto": (
+        "이 설계도의 종류를 먼저 판별하고(기계/전기/CPLD/기타), "
+        "종류에 맞는 엔지니어 관점에서 상세히 분석하세요.\n"
+        "치수·기호·결선·신호·부품·주석 등 중요한 정보를 빠짐없이 추출하세요.\n"
+    ),
+}
+
+
+async def _gemini_analyze_file(file_path: str, prompt: str, timeout: int = 300) -> str:
+    """Gemini CLI로 임의 파일 분석 (PDF/PNG/JPG 모두 지원, @filepath 구문)."""
+    import shutil
+    if not shutil.which(GEMINI_CLI):
+        return f"_(Gemini CLI '{GEMINI_CLI}' 미설치)_"
+
+    full_prompt = prompt + f"\n\n분석 대상: @{file_path}\n\n한글로 상세히 답하세요."
+    proc = await asyncio.create_subprocess_exec(
+        GEMINI_CLI, "-m", GEMINI_MODEL, "-p", full_prompt,
+        "--approval-mode", "yolo",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return f"_(Gemini CLI 타임아웃 {timeout}s)_"
+
+    if proc.returncode != 0:
+        err = (stderr or b"").decode(errors="replace")[:500]
+        return f"_(Gemini CLI 실패 rc={proc.returncode}: {err})_"
+
+    out = (stdout or b"").decode(errors="replace")
+    lines = [ln for ln in out.splitlines() if not ln.startswith("Loaded cached")]
+    return "\n".join(lines).strip()
+
+
+def _pdf_extract_text(pdf_bytes: bytes) -> str:
+    """PyMuPDF로 PDF 벡터 텍스트 추출 (주석·치수 텍스트). 설치 없으면 빈 문자열."""
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return ""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        parts = []
+        for i, page in enumerate(doc):
+            txt = page.get_text("text") or ""
+            if txt.strip():
+                parts.append(f"--- Page {i+1} ---\n{txt.strip()}")
+        doc.close()
+        return "\n\n".join(parts)
+    except Exception as e:
+        return f"_(PDF 텍스트 추출 실패: {e})_"
+
+
+async def _claude_synthesize_blueprint(
+    vision_out: str,
+    extracted_text: str,
+    drawing_type: str,
+    query: str = "",
+) -> str:
+    """Gemini 시각 분석 + 벡터 텍스트 → Claude 엔지니어링 리포트."""
+    type_label = {
+        "mechanical": "기계 설계도",
+        "electrical": "전기 설계도",
+        "cpld":       "CPLD/FPGA 디지털 설계도",
+        "auto":       "설계도",
+    }.get(drawing_type, "설계도")
+
+    focus = f"\n사용자 추가 초점: {query}" if query else ""
+    text_clip = extracted_text[:40_000] if extracted_text else "_(벡터 텍스트 없음 — 이미지 도면이거나 pymupdf 미설치)_"
+    vision_clip = vision_out[:60_000]
+
+    system = (
+        f"당신은 {type_label} 해석 전문 엔지니어입니다. "
+        "제공된 시각 분석과 벡터 텍스트를 통합해 실무자가 바로 활용할 수 있는 분석 리포트를 작성하세요."
+    )
+    user = f"""다음 자료를 종합해 {type_label}를 분석하세요.
+
+=== 1. Gemini 시각 분석 (이미지/도형/기호) ===
+{vision_clip}
+
+=== 2. PDF 벡터 텍스트 (주석·치수·표) ===
+{text_clip}
+
+=== 분석 요구사항 ===
+1. **도면 개요** — 제목, 도면번호, 작성자, 개정일, 축척
+2. **종류와 용도** — 무엇을 위한 설계인지
+3. **핵심 사양** — 치수/정격/신호/인터페이스 등 타입별 핵심 데이터
+4. **부품/블록/소자 리스트** — 표로 정리 (이름, 역할, 수량/수치)
+5. **주요 관계·동작 설명** — 조립/결선/신호 흐름
+6. **잠재 이슈 또는 검토 필요 지점** — 제작/시공/합성 시 주의사항
+7. **이 도면을 100% 이해하려면 함께 확인할 자료**{focus}
+
+한글로 상세하게, 엔지니어가 바로 참조할 수 있도록 작성하세요."""
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user",   "content": user},
+    ]
+    data = await gateway_chat(messages, model="claude-sonnet")
+    return format_response(data)
+
+
+async def _ingest_blueprint_to_rag(
+    file_id: str,
+    filename: str,
+    drawing_type: str,
+    vision_out: str,
+    extracted_text: str,
+    synthesis: str,
+    tags: list[str] | None = None,
+) -> dict:
+    """설계도 분석 결과를 RAG에 저장. 논문과 유사한 구조."""
+    tags = tags or []
+    source = f"blueprint:{filename}"
+    base_meta = {
+        "type":         "blueprint",
+        "drawing_type": drawing_type,
+        "file_id":      file_id,
+        "filename":     filename,
+        "tags":         tags,
+    }
+    results = {"source": source, "chunks_text": 0, "chunk_vision": 0, "chunk_synthesis": 0, "failed": 0}
+
+    # 1. PDF 벡터 텍스트 (있을 때)
+    if extracted_text and "실패" not in extracted_text[:30] and "없음" not in extracted_text[:30]:
+        for i, c in enumerate(_chunk_markdown(extracted_text, chunk_size=3000)):
+            rid = await _rag_ingest(c, source, {**base_meta, "part": "pdf_text", "chunk_idx": i})
+            if rid: results["chunks_text"] += 1
+            else:   results["failed"] += 1
+
+    # 2. Gemini 시각 분석
+    if vision_out and "실패" not in vision_out[:30] and "미설치" not in vision_out[:30]:
+        rid = await _rag_ingest(vision_out, f"{source}#vision", {**base_meta, "part": "vision"})
+        if rid: results["chunk_vision"] = 1
+        else:   results["failed"] += 1
+
+    # 3. Claude 종합
+    if synthesis and "실패" not in synthesis[:30]:
+        rid = await _rag_ingest(synthesis, f"{source}#synthesis", {**base_meta, "part": "synthesis"})
+        if rid: results["chunk_synthesis"] = 1
+        else:   results["failed"] += 1
+
+    return results
+
+
 async def _gemini_analyze_pdf(pdf_bytes: bytes, query: str = "") -> str:
     """Gemini CLI로 PDF 분석 (subprocess, API 키 불필요 — OAuth 캐시 사용)."""
     import shutil, tempfile
@@ -596,6 +778,15 @@ async def _claude_synthesize_paper(
 # ── Intent Classification (스마트 디스패처) ────────────────────────────────────
 
 _INTENT_RULES = {
+    "blueprint_query": [
+        "저장된 설계도", "인제스트된 도면", "업로드한 설계도", "도면에서 찾",
+        "저장한 blueprint",
+    ],
+    "blueprint_analysis": [
+        "설계도", "도면", "blueprint", "schematic", "회로도", "단선결선도",
+        "cpld", "fpga", "pcb", "gd&t", "기계 도면", "전기 도면", "조립도",
+        "부품도", "결선도", "배치도", "p&id", "wiring", "drawing 분석",
+    ],
     "paper_query": [
         "저장된 논문", "인제스트된 논문", "업로드한 논문", "논문 검색",
         "분석된 논문에서", "논문에서 찾아", "저장한 paper",
@@ -648,7 +839,8 @@ def _classify_intent(text: str) -> tuple[str, list[str]]:
              > medical > code > multi_agent > question (기본값)
     """
     low = text.lower()
-    priority = ["paper_query", "paper_analysis", "gpu_compute", "screenshot", "remote_shell",
+    priority = ["blueprint_query", "blueprint_analysis", "paper_query", "paper_analysis",
+                "gpu_compute", "screenshot", "remote_shell",
                 "file_analysis", "medical", "code", "multi_agent"]
     for intent in priority:
         matched = [kw for kw in _INTENT_RULES[intent] if kw in low]
@@ -1088,6 +1280,57 @@ async def list_tools() -> list[Tool]:
                                         "items": {"type": "string"},
                                         "default": [],
                                         "description": "(선택) RAG 태그"},
+                },
+            },
+        ),
+        Tool(
+            name="quetta_analyze_blueprint",
+            description=(
+                "**설계도 분석** — 기계/전기/CPLD 설계도(PDF·PNG)를 Gemini Vision + Claude 종합으로 완전 해석.\n\n"
+                "1. PDF면 PyMuPDF로 벡터 텍스트(주석·치수·BOM) 추출\n"
+                "2. Gemini CLI로 도면 시각 분석 (타입별 전문 프롬프트)\n"
+                "3. Claude Sonnet이 두 결과를 통합해 엔지니어링 리포트 생성\n"
+                "4. 결과를 RAG에 자동 인제스트 → `quetta_blueprint_query`로 재질의\n\n"
+                "drawing_type:\n"
+                "  - `mechanical`: 기계 설계 (GD&T, 치수, 공차, 조립도)\n"
+                "  - `electrical`: 전기 설계 (배전/제어/PLC/단선결선도)\n"
+                "  - `cpld`: CPLD/FPGA/디지털 논리 (RTL, 타이밍, FSM)\n"
+                "  - `auto`: 자동 감지 (기본값)"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path":    {"type": "string", "default": "",
+                                     "description": "서버 로컬 PDF/PNG 경로"},
+                    "file_id":      {"type": "string", "default": "",
+                                     "description": "이미 TUS 업로드된 파일 ID"},
+                    "drawing_type": {"type": "string",
+                                     "enum": ["mechanical", "electrical", "cpld", "auto"],
+                                     "default": "auto"},
+                    "query":        {"type": "string", "default": "",
+                                     "description": "(선택) 집중 분석 포인트"},
+                    "tags":         {"type": "array", "items": {"type": "string"}, "default": []},
+                    "ingest_to_rag":{"type": "boolean", "default": True},
+                    "skip_gemini":  {"type": "boolean", "default": False},
+                },
+            },
+        ),
+        Tool(
+            name="quetta_blueprint_query",
+            description=(
+                "분석·인제스트된 설계도를 RAG에서 검색/질의.\n"
+                "- 특정 도면: `filename` 지정\n"
+                "- 특정 타입: `drawing_type` 지정 (mechanical/electrical/cpld)\n"
+                "- 목록: `list=true`"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query":        {"type": "string", "default": ""},
+                    "filename":     {"type": "string", "default": ""},
+                    "drawing_type": {"type": "string", "default": ""},
+                    "list":         {"type": "boolean", "default": False},
+                    "top_k":        {"type": "integer", "default": 8},
                 },
             },
         ),
@@ -1808,6 +2051,198 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         return [TextContent(type="text", text=final)]
 
+    # ── quetta_analyze_blueprint (설계도 분석) ────────────────────────────────
+    elif name == "quetta_analyze_blueprint":
+        import tempfile, pathlib
+        file_path = arguments.get("file_path", "").strip()
+        file_id   = arguments.get("file_id", "").strip()
+        dtype     = arguments.get("drawing_type", "auto")
+        query     = arguments.get("query", "")
+        skip_gem  = arguments.get("skip_gemini", False)
+        ingest    = arguments.get("ingest_to_rag", True)
+        tags      = arguments.get("tags", [])
+
+        if not file_path and not file_id:
+            return [TextContent(type="text", text="❌ `file_path` 또는 `file_id` 필요.")]
+
+        # 1) 파일 바이트 확보 + 임시 경로 (Gemini CLI @filepath 용)
+        progress = [f"## 📐 설계도 분석 파이프라인 (drawing_type: {dtype})"]
+        raw: bytes = b""
+        fname = ""
+        if file_path:
+            p = pathlib.Path(file_path)
+            if not p.exists():
+                return [TextContent(type="text", text=f"❌ 파일 없음: {file_path}")]
+            raw = p.read_bytes()
+            fname = p.name
+            progress.append(f"**1/3**  파일: `{fname}` ({len(raw):,} bytes)")
+            # TUS 업로드로 file_id 획득 (RAG 인제스트 링크용)
+            if ingest and not file_id:
+                try:
+                    file_id = await _tus_upload(fname, raw)
+                    progress.append(f"  → TUS 업로드: `{file_id}`")
+                except Exception as e:
+                    progress.append(f"  → _(TUS 업로드 실패 — RAG 저장은 계속: {e})_")
+        else:
+            async with httpx.AsyncClient(timeout=120) as c:
+                info = await c.get(f"{RAG_URL}/upload/files/{file_id}", headers=_rag_headers())
+                info.raise_for_status()
+                meta = info.json()
+                fname = meta.get("filename", f"blueprint_{file_id}")
+                dl = await c.get(f"{TUSD_URL.rstrip('/')}/files/{file_id}", headers=_tusd_headers())
+                dl.raise_for_status()
+                raw = dl.content
+            progress.append(f"**1/3**  파일: `{fname}` ({len(raw):,} bytes) — file_id: `{file_id}`")
+
+        # 파일 확장자 판별
+        ext = fname.lower().rsplit(".", 1)[-1] if "." in fname else ""
+        if ext not in ("pdf", "png", "jpg", "jpeg"):
+            return [TextContent(type="text", text=f"❌ 지원하지 않는 형식: .{ext} (PDF/PNG/JPG만)")]
+
+        # 2) PDF 벡터 텍스트 추출 (PDF일 때만)
+        extracted_text = ""
+        if ext == "pdf":
+            extracted_text = _pdf_extract_text(raw)
+            if extracted_text and "실패" not in extracted_text[:30]:
+                progress.append(f"**2/3**  PDF 텍스트 추출: {len(extracted_text):,} chars")
+            else:
+                progress.append(f"**2/3**  PDF 텍스트 없음 (이미지 도면으로 처리)")
+        else:
+            progress.append(f"**2/3**  이미지 파일 — 텍스트 추출 생략")
+
+        # 3) Gemini Vision (타입별 프롬프트)
+        vision_out = ""
+        if not skip_gem:
+            with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tf:
+                tf.write(raw)
+                tmp_path = tf.name
+            try:
+                prompt = _DRAWING_PROMPTS.get(dtype, _DRAWING_PROMPTS["auto"])
+                if query:
+                    prompt += f"\n추가 초점: {query}\n"
+                vision_out = await _gemini_analyze_file(tmp_path, prompt, timeout=300)
+                progress.append(f"**3/3**  Gemini 시각 분석: {len(vision_out):,} chars")
+            finally:
+                try: os.unlink(tmp_path)
+                except: pass
+        else:
+            progress.append(f"**3/3**  Gemini 건너뜀")
+
+        # 4) Claude 종합
+        try:
+            synthesis = await _claude_synthesize_blueprint(vision_out, extracted_text, dtype, query)
+        except Exception as e:
+            synthesis = f"_(Claude 종합 실패: {e})_"
+
+        # 5) RAG 인제스트
+        ingest_summary = ""
+        if ingest and file_id:
+            try:
+                r = await _ingest_blueprint_to_rag(
+                    file_id=file_id, filename=fname, drawing_type=dtype,
+                    vision_out=vision_out, extracted_text=extracted_text,
+                    synthesis=synthesis, tags=tags,
+                )
+                ingest_summary = (
+                    f"\n**RAG 인제스트 완료** (source: `{r['source']}`)\n"
+                    f"- 벡터 텍스트 청크: {r['chunks_text']}개\n"
+                    f"- Gemini 시각 분석: {r['chunk_vision']}\n"
+                    f"- Claude 종합: {r['chunk_synthesis']}\n"
+                    + (f"- 실패: {r['failed']}\n" if r['failed'] else "")
+                    + f"\n이후 `quetta_blueprint_query(query=\"...\", filename=\"{fname}\")`로 질의하세요.\n"
+                )
+            except Exception as e:
+                ingest_summary = f"\n_(RAG 인제스트 실패: {e})_\n"
+
+        # 6) 최종 출력
+        final  = "\n".join(progress) + "\n\n---\n\n"
+        final += f"## 🔧 엔지니어링 분석 리포트 ({dtype})\n\n{synthesis}\n\n---\n"
+        final += ingest_summary + "\n---\n\n"
+        if vision_out:
+            final += "<details><summary>👁 Gemini 시각 분석 원본</summary>\n\n"
+            final += vision_out[:8000] + "\n\n</details>\n\n"
+        if extracted_text and len(extracted_text) > 30:
+            final += "<details><summary>📄 PDF 벡터 텍스트 (주석·치수)</summary>\n\n```\n"
+            final += extracted_text[:6000] + ("\n\n[...]" if len(extracted_text) > 6000 else "")
+            final += "\n```\n</details>\n"
+        return [TextContent(type="text", text=final)]
+
+    # ── quetta_blueprint_query ────────────────────────────────────────────────
+    elif name == "quetta_blueprint_query":
+        q        = arguments.get("query", "").strip()
+        filename = arguments.get("filename", "").strip()
+        dtype    = arguments.get("drawing_type", "").strip()
+        do_list  = arguments.get("list", False)
+        top_k    = arguments.get("top_k", 8)
+
+        def _bp_hits(results: list) -> list:
+            out = []
+            for h in results:
+                meta = h.get("metadata", {}) or {}
+                if meta.get("type") != "blueprint": continue
+                if filename and meta.get("filename") != filename: continue
+                if dtype and meta.get("drawing_type") != dtype: continue
+                out.append(h)
+            return out
+
+        if do_list or not q:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    f"{RAG_URL}/search",
+                    json={"query": "blueprint drawing schematic diagram 설계도", "limit": 50, "mode": "rag"},
+                    headers=_rag_headers(),
+                )
+            if resp.status_code != 200:
+                return [TextContent(type="text", text=f"RAG 조회 실패 ({resp.status_code})")]
+            body = resp.json()
+            hits = body if isinstance(body, list) else body.get("results", [])
+            bps = _bp_hits(hits)
+            seen = {}
+            for h in bps:
+                meta = h.get("metadata", {}) or {}
+                fn = meta.get("filename", "")
+                dt = meta.get("drawing_type", "?")
+                if fn and fn not in seen:
+                    seen[fn] = {"dt": dt, "file_id": meta.get("file_id", ""), "chunks": 0}
+                if fn: seen[fn]["chunks"] += 1
+            if not seen:
+                return [TextContent(type="text", text="인제스트된 설계도가 없습니다. `quetta_analyze_blueprint` 먼저 실행.")]
+            lines = [f"## 인제스트된 설계도 ({len(seen)}개)\n"]
+            for fn, info in seen.items():
+                lines.append(f"- **{fn}**  [{info['dt']}]  청크 {info['chunks']}개, file_id: `{info['file_id']}`")
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        # 질의
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{RAG_URL}/search",
+                json={"query": q, "limit": max(top_k * 3, 20), "mode": "rag"},
+                headers=_rag_headers(),
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            all_hits = body if isinstance(body, list) else body.get("results", [])
+            hits = _bp_hits(all_hits)[:top_k]
+
+        if not hits:
+            return [TextContent(type="text", text=f"관련 설계도 내용을 찾지 못했습니다.")]
+
+        context = "\n\n".join(
+            f"[출처: {h.get('source','?')}  type={h.get('metadata',{}).get('drawing_type','?')}  part={h.get('metadata',{}).get('part','?')}]\n"
+            f"{h.get('text', h.get('content',''))[:1500]}"
+            for h in hits[:top_k]
+        )
+        messages = [
+            {"role": "system", "content": "당신은 설계도 분석 전문 엔지니어입니다. 제공된 도면 발췌를 근거로 한글로 정확히 답하세요. 치수·부품번호·신호명·핀번호 등은 원문 그대로 인용하세요."},
+            {"role": "user", "content": f"질문: {q}\n\n=== 도면 발췌 ({len(hits)}개) ===\n{context}"},
+        ]
+        data = await gateway_chat(messages, model="claude-sonnet")
+        answer = format_response(data)
+
+        return [TextContent(type="text", text=(
+            f"## 📐 설계도 질의 결과\n\n**질문:** {q}\n**필터:** {filename or '(전체)'} / {dtype or '모든 타입'}  |  참조: {len(hits)}개\n\n---\n\n{answer}"
+        ))]
+
     # ── quetta_paper_query (RAG에 저장된 논문 검색/질의) ───────────────────────
     elif name == "quetta_paper_query":
         q        = arguments.get("query", "").strip()
@@ -1904,7 +2339,26 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         # 의도별 내부 dispatch
         try:
-            if intent == "paper_query":
+            if intent == "blueprint_query":
+                result = await call_tool("quetta_blueprint_query", {"query": req})
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "blueprint_analysis":
+                # 타입 추정
+                low = req.lower()
+                dt = "auto"
+                if any(k in low for k in ["cpld", "fpga", "pcb", "verilog", "vhdl", "rtl"]):
+                    dt = "cpld"
+                elif any(k in low for k in ["전기", "회로도", "결선", "plc", "배전", "control"]):
+                    dt = "electrical"
+                elif any(k in low for k in ["기계", "gd&t", "조립", "부품도", "공차", "치수"]):
+                    dt = "mechanical"
+                inner_args = {"query": req, "drawing_type": dt}
+                if file_path: inner_args["file_path"] = file_path
+                result = await call_tool("quetta_analyze_blueprint", inner_args)
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "paper_query":
                 result = await call_tool("quetta_paper_query", {"query": req})
                 return [TextContent(type="text", text=route_info), *result]
 

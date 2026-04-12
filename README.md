@@ -1,6 +1,6 @@
 # quetta-agents-mcp
 
-[![version](https://img.shields.io/badge/version-0.8.0-blue)](https://github.com/choyunsung/coyun-quetta-agents-mcp)
+[![version](https://img.shields.io/badge/version-0.11.0-blue)](https://github.com/choyunsung/quetta-agents-mcp) [![docs](https://img.shields.io/badge/docs-detailed-green)](./docs/README.md)
 
 [Quetta Agents](https://github.com/choyunsung/quetta-agents) 스마트 LLM 게이트웨이 + 원격 PC(GPU) 제어를 Claude에서 바로 사용할 수 있는 MCP 서버.
 
@@ -443,9 +443,22 @@ quetta_upload_process_all()                            # 미처리 파일 일괄
 
 ---
 
+## 상세 문서
+
+[📚 docs/](./docs/README.md) — 아키텍처·각 기능·도구 레퍼런스·설치·트러블슈팅 상세.
+
+---
+
 ## 변경 이력
 
-### v0.10.0 (최신)
+### v0.11.0 (최신)
+- **설계도 분석** `quetta_analyze_blueprint` 추가 (기계/전기/CPLD, PDF/PNG)
+- PyMuPDF 벡터 텍스트 추출 + Gemini Vision + Claude 종합
+- 설계도 RAG 자동 인제스트 + `quetta_blueprint_query` 질의 도구
+- `quetta_auto` 에 blueprint_analysis / blueprint_query 의도 추가
+- 상세 docs/ 디렉토리 추가 (외부 설명 자료)
+
+### v0.10.0
 - **논문 RAG 자동 인제스트** — `quetta_analyze_paper` 가 분석 후 결과를 RAG에 자동 저장
 - 새 도구 `quetta_paper_query` — 저장된 논문 검색/질의 (특정 논문 필터 지원)
 - Nougat 본문은 섹션/청크 단위 분할 저장, Claude 종합·Gemini 시각분석은 단일 문서
