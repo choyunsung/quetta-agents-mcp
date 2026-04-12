@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
 .venv/
-dist/
 *.egg-info/
+
+# dist/ 는 빌드 산출물이지만 PDF 문서는 배포 대상이라 git에 포함
+# Python wheel/sdist 빌드 시 생성되는 파일만 무시
+dist/*.whl
+dist/*.tar.gz

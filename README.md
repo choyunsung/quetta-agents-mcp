@@ -445,7 +445,13 @@ quetta_upload_process_all()                            # 미처리 파일 일괄
 
 ## 상세 문서
 
-[📚 docs/](./docs/README.md) — 아키텍처·각 기능·도구 레퍼런스·설치·트러블슈팅 상세.
+- [📚 docs/](./docs/README.md) — 온라인 문서 (10개 섹션)
+- [📄 PDF 다운로드](./dist/quetta-agents-mcp-docs.pdf) — 단일 PDF (~1.5 MB) 오프라인 배포용
+
+PDF 재생성:
+```bash
+python3 scripts/build-docs-pdf.py
+```
 
 ---
 
