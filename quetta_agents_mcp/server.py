@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.9.1"
+VERSION          = "0.10.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -443,6 +443,112 @@ async def _gemini_analyze_pdf(pdf_bytes: bytes, query: str = "") -> str:
         except: pass
 
 
+def _chunk_markdown(md: str, chunk_size: int = 3000, overlap: int = 200) -> list[str]:
+    """마크다운을 섹션/줄 경계를 존중하며 청킹."""
+    if not md or len(md) <= chunk_size:
+        return [md] if md else []
+
+    # 1차: '# ' 헤딩 단위로 분리
+    sections: list[str] = []
+    cur: list[str] = []
+    for line in md.splitlines(keepends=True):
+        if line.startswith("# ") and cur:
+            sections.append("".join(cur))
+            cur = [line]
+        else:
+            cur.append(line)
+    if cur:
+        sections.append("".join(cur))
+
+    # 2차: 섹션 길이가 chunk_size 초과하면 다시 분할
+    chunks: list[str] = []
+    for sec in sections:
+        if len(sec) <= chunk_size:
+            chunks.append(sec)
+            continue
+        # 줄 단위로 쪼개며 chunk_size 초과 시 분할
+        buf = ""
+        for line in sec.splitlines(keepends=True):
+            if len(buf) + len(line) > chunk_size:
+                if buf:
+                    chunks.append(buf)
+                    buf = buf[-overlap:] if overlap else ""
+            buf += line
+        if buf.strip():
+            chunks.append(buf)
+    return [c for c in chunks if c.strip()]
+
+
+async def _rag_ingest(text: str, source: str, metadata: dict) -> str | None:
+    """RAG /ingest 호출. 성공 시 document id, 실패 시 None."""
+    async with httpx.AsyncClient(timeout=60) as client:
+        try:
+            resp = await client.post(
+                f"{RAG_URL}/ingest",
+                json={
+                    "text": text[:49_000],  # 50K 한도 보호
+                    "source": source,
+                    "metadata": metadata,
+                    "update_mode": "add",
+                },
+                headers=_rag_headers(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("id") or data.get("document_id") or "ok"
+        except Exception as e:
+            logger.warning(f"RAG ingest 실패: {e}")
+            return None
+
+
+async def _ingest_paper_to_rag(
+    file_id: str,
+    filename: str,
+    nougat_md: str,
+    synthesis: str,
+    gemini_out: str = "",
+    tags: list[str] | None = None,
+) -> dict:
+    """논문 분석 결과를 RAG에 청킹해서 인제스트.
+    반환: {source, chunks_nougat, chunk_synthesis, chunk_gemini, failed}
+    """
+    tags = tags or []
+    source = f"paper:{filename}"
+    base_meta = {
+        "type":      "paper",
+        "file_id":   file_id,
+        "filename":  filename,
+        "tags":      tags,
+    }
+
+    results = {"source": source, "chunks_nougat": 0, "chunk_synthesis": 0, "chunk_gemini": 0, "failed": 0}
+
+    # 1. Nougat 본문 청킹 & 인제스트
+    if nougat_md and "실패" not in nougat_md[:30]:
+        chunks = _chunk_markdown(nougat_md, chunk_size=3000)
+        for i, c in enumerate(chunks):
+            meta = {**base_meta, "part": "body", "chunk_idx": i, "chunk_total": len(chunks)}
+            rid = await _rag_ingest(c, source, meta)
+            if rid: results["chunks_nougat"] += 1
+            else:   results["failed"] += 1
+
+    # 2. Claude 종합 (단일)
+    if synthesis and "실패" not in synthesis[:30] and "건너뜀" not in synthesis[:30]:
+        meta = {**base_meta, "part": "synthesis"}
+        rid = await _rag_ingest(synthesis, f"{source}#synthesis", meta)
+        if rid: results["chunk_synthesis"] = 1
+        else:   results["failed"] += 1
+
+    # 3. Gemini 시각 분석 (단일)
+    if gemini_out and "건너뜀" not in gemini_out[:30] and "실패" not in gemini_out[:30]:
+        meta = {**base_meta, "part": "gemini_vision"}
+        rid = await _rag_ingest(gemini_out, f"{source}#gemini", meta)
+        if rid: results["chunk_gemini"] = 1
+        else:   results["failed"] += 1
+
+    return results
+
+
 async def _claude_synthesize_paper(
     nougat_md: str,
     gemini_analysis: str,
@@ -490,11 +596,14 @@ async def _claude_synthesize_paper(
 # ── Intent Classification (스마트 디스패처) ────────────────────────────────────
 
 _INTENT_RULES = {
+    "paper_query": [
+        "저장된 논문", "인제스트된 논문", "업로드한 논문", "논문 검색",
+        "분석된 논문에서", "논문에서 찾아", "저장한 paper",
+    ],
     "paper_analysis": [
         "논문 분석", "논문을 분석", "논문 해석", "paper analysis",
         "pdf 분석", ".pdf", "arxiv", "학술 논문", "paper review",
-        "nougat", "수식 포함", "학술지", "abstract", "저자 소속",
-        "figure 분석", "table 해석",
+        "nougat", "수식 포함", "학술지", "figure 분석", "table 해석",
     ],
     "gpu_compute": [
         "gpu", "cuda", "torch", "tensorflow", "pytorch", "nvidia-smi",
@@ -539,7 +648,7 @@ def _classify_intent(text: str) -> tuple[str, list[str]]:
              > medical > code > multi_agent > question (기본값)
     """
     low = text.lower()
-    priority = ["paper_analysis", "gpu_compute", "screenshot", "remote_shell",
+    priority = ["paper_query", "paper_analysis", "gpu_compute", "screenshot", "remote_shell",
                 "file_analysis", "medical", "code", "multi_agent"]
     for intent in priority:
         matched = [kw for kw in _INTENT_RULES[intent] if kw in low]
@@ -973,6 +1082,35 @@ async def list_tools() -> list[Tool]:
                                         "description": "Gemini 단계 건너뛰기"},
                     "skip_claude":    {"type": "boolean", "default": False,
                                         "description": "Claude 종합 단계 건너뛰기 (nougat + gemini만)"},
+                    "ingest_to_rag":  {"type": "boolean", "default": True,
+                                        "description": "분석 결과를 RAG 지식베이스에 자동 인제스트 (이후 quetta_ask로 참조 가능)"},
+                    "tags":           {"type": "array",
+                                        "items": {"type": "string"},
+                                        "default": [],
+                                        "description": "(선택) RAG 태그"},
+                },
+            },
+        ),
+        Tool(
+            name="quetta_paper_query",
+            description=(
+                "업로드·분석된 논문들을 RAG에서 검색/질의합니다.\n"
+                "`quetta_analyze_paper` 로 인제스트된 논문 본문·종합·그림 분석이 대상입니다.\n\n"
+                "- 특정 논문만 대상: `filename` 지정\n"
+                "- 전체 논문 대상: `filename` 생략\n"
+                "- 질문 없이 `list=true`: 인제스트된 논문 목록만 반환"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query":    {"type": "string", "default": "",
+                                 "description": "논문에 대한 질문"},
+                    "filename": {"type": "string", "default": "",
+                                 "description": "(선택) 특정 논문 파일명으로 필터"},
+                    "list":     {"type": "boolean", "default": False,
+                                 "description": "true면 질의 대신 인제스트된 논문 목록 반환"},
+                    "top_k":    {"type": "integer", "default": 8,
+                                 "description": "RAG 검색 반환 개수"},
                 },
             },
         ),
@@ -1630,9 +1768,37 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             except Exception as e:
                 synthesis = f"_(Claude 종합 실패: {e})_"
 
-        # 5) 최종 출력
+        # 5) RAG 인제스트 (분석 결과를 지식베이스에 저장)
+        ingest_summary = ""
+        if arguments.get("ingest_to_rag", True):
+            try:
+                fname = file_path.rsplit("/", 1)[-1] if file_path else f"paper_{file_id}.pdf"
+                r = await _ingest_paper_to_rag(
+                    file_id=file_id,
+                    filename=fname,
+                    nougat_md=nougat_md,
+                    synthesis=synthesis,
+                    gemini_out=gemini_out,
+                    tags=arguments.get("tags", []),
+                )
+                ingest_summary = (
+                    f"\n**RAG 인제스트 완료**  \n"
+                    f"- Source 태그: `{r['source']}`\n"
+                    f"- Nougat 본문 청크: {r['chunks_nougat']}개\n"
+                    f"- Claude 종합: {r['chunk_synthesis']}\n"
+                    f"- Gemini 시각분석: {r['chunk_gemini']}\n"
+                    + (f"- 실패: {r['failed']}\n" if r['failed'] else "")
+                    + f"\n이후 `quetta_paper_query(query=\"...\", filename=\"{fname}\")`로 질의하세요.\n"
+                )
+            except Exception as e:
+                ingest_summary = f"\n_(RAG 인제스트 실패: {e})_\n"
+        else:
+            ingest_summary = "\n_(RAG 인제스트 건너뜀 — ingest_to_rag=False)_\n"
+
+        # 6) 최종 출력
         final = "\n".join(progress) + "\n\n---\n\n"
-        final += "## 🎯 종합 분석 (Claude)\n\n" + synthesis + "\n\n---\n\n"
+        final += "## 🎯 종합 분석 (Claude)\n\n" + synthesis + "\n\n---\n"
+        final += ingest_summary + "\n---\n\n"
         final += "<details><summary>🔍 Nougat 원본 추출 (접어서 보기)</summary>\n\n```markdown\n"
         final += nougat_md[:8000] + ("\n\n[...이하 생략...]" if len(nougat_md) > 8000 else "")
         final += "\n```\n</details>\n\n"
@@ -1641,6 +1807,85 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             final += gemini_out[:6000] + "\n\n</details>\n"
 
         return [TextContent(type="text", text=final)]
+
+    # ── quetta_paper_query (RAG에 저장된 논문 검색/질의) ───────────────────────
+    elif name == "quetta_paper_query":
+        q        = arguments.get("query", "").strip()
+        filename = arguments.get("filename", "").strip()
+        do_list  = arguments.get("list", False)
+        top_k    = arguments.get("top_k", 8)
+
+        def _paper_hits(results: list) -> list:
+            """RAG 결과에서 paper 타입만 필터, 선택적으로 filename 일치."""
+            out = []
+            for h in results:
+                meta = h.get("metadata", {}) or {}
+                if meta.get("type") != "paper": continue
+                if filename and meta.get("filename") != filename: continue
+                out.append(h)
+            return out
+
+        # 1) 인제스트된 논문 목록
+        if do_list or not q:
+            async with httpx.AsyncClient(timeout=20) as client:
+                resp = await client.post(
+                    f"{RAG_URL}/search",
+                    json={"query": "paper abstract title", "limit": 50, "mode": "rag"},
+                    headers=_rag_headers(),
+                )
+            if resp.status_code != 200:
+                return [TextContent(type="text", text=f"RAG 조회 실패 ({resp.status_code}): {resp.text[:300]}")]
+            body = resp.json()
+            hits = body if isinstance(body, list) else body.get("results", [])
+            papers = _paper_hits(hits)
+            seen: dict[str, dict] = {}
+            for h in papers:
+                meta = h.get("metadata", {}) or {}
+                fn = meta.get("filename", "")
+                if fn and fn not in seen:
+                    seen[fn] = {"file_id": meta.get("file_id", ""), "chunks": 0}
+                if fn: seen[fn]["chunks"] += 1
+            if not seen:
+                return [TextContent(type="text", text="인제스트된 논문이 없습니다. `quetta_analyze_paper`를 먼저 실행하세요.")]
+            lines = [f"## 인제스트된 논문 ({len(seen)}개)\n"]
+            for fn, info in seen.items():
+                lines.append(f"- **{fn}**  (청크 {info['chunks']}개, file_id: `{info['file_id']}`)")
+            return [TextContent(type="text", text="\n".join(lines))]
+
+        # 2) 실제 질의
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{RAG_URL}/search",
+                json={"query": q, "limit": max(top_k * 3, 20), "mode": "rag"},
+                headers=_rag_headers(),
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            all_hits = body if isinstance(body, list) else body.get("results", [])
+            hits = _paper_hits(all_hits)[:top_k]
+
+        if not hits:
+            return [TextContent(type="text", text=f"관련 내용을 찾지 못했습니다 (filename={filename or '(전체)'}).")]
+
+        context = "\n\n".join(
+            f"[출처: {h.get('source','?')}  part={h.get('metadata',{}).get('part','?')}  chunk={h.get('metadata',{}).get('chunk_idx','?')}]\n"
+            f"{h.get('text', h.get('content',''))[:1500]}"
+            for h in hits[:top_k]
+        )
+
+        messages = [
+            {"role": "system", "content": "당신은 학술 논문 분석 전문가입니다. 제공된 논문 발췌본을 근거로 한글로 정확히 답하세요. 인용할 때는 출처를 명시하세요."},
+            {"role": "user", "content": f"질문: {q}\n\n=== 관련 논문 발췌 ({len(hits)}개) ===\n{context}"},
+        ]
+        data = await gateway_chat(messages, model="claude-sonnet")
+        answer = format_response(data)
+
+        return [TextContent(type="text", text=(
+            f"## 📚 논문 질의 결과\n\n"
+            f"**질문:** {q}\n"
+            f"**필터:** {filename or '전체 논문'}  |  참조: {len(hits)}개 청크\n\n"
+            f"---\n\n{answer}"
+        ))]
 
     # ── quetta_auto (스마트 디스패처) ─────────────────────────────────────────
     elif name == "quetta_auto":
@@ -1659,7 +1904,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         # 의도별 내부 dispatch
         try:
-            if intent == "paper_analysis":
+            if intent == "paper_query":
+                result = await call_tool("quetta_paper_query", {"query": req})
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "paper_analysis":
                 inner_args = {"query": req}
                 if file_path: inner_args["file_path"] = file_path
                 if agent_id:  inner_args["agent_id"]  = agent_id

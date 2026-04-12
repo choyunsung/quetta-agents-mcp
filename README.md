@@ -170,7 +170,8 @@ quetta_auto(request="이 파일 분석해줘", file_path="/data/patient.csv")
 
 | 도구 | 설명 |
 |------|------|
-| `quetta_analyze_paper` | PDF를 **Nougat(OCR) + Gemini(Vision) + Claude(종합)** 3단 파이프라인으로 완벽 이해 |
+| `quetta_analyze_paper` | PDF를 **Nougat(OCR) + Gemini(Vision) + Claude(종합)** 3단 파이프라인으로 완벽 이해 + RAG 자동 인제스트 |
+| `quetta_paper_query` | 분석·인제스트된 논문들을 RAG에서 검색/질의 (특정 논문만 필터 가능) |
 
 **파이프라인:**
 1. **Nougat** (GPU 에이전트): PDF → 수식·표·구조가 보존된 고품질 Markdown (`choyunsung/nougat` fork 사용)
@@ -185,17 +186,45 @@ gemini  # 첫 실행 시 Google OAuth 로그인 (브라우저 열림) — 이후
 
 **사용 예시:**
 ```python
-# 로컬 PDF 분석 (서버 경로)
+# 로컬 PDF 분석 + RAG 자동 저장 (기본 동작)
 quetta_analyze_paper(file_path="/data/papers/attention.pdf")
 
-# 이미 업로드된 PDF 분석 (file_id)
-quetta_analyze_paper(file_id="abc123", query="제안된 attention mechanism의 수식 유도")
+# 특정 초점으로 분석 + 태그 지정
+quetta_analyze_paper(
+    file_path="/data/papers/attention.pdf",
+    query="제안된 attention mechanism의 수식 유도",
+    tags=["transformer", "2017"],
+)
+
+# RAG 저장 안 함 (1회성 분석)
+quetta_analyze_paper(file_path="/data/paper.pdf", ingest_to_rag=False)
 
 # Gemini 건너뛰고 빠르게
 quetta_analyze_paper(file_path="/data/paper.pdf", skip_gemini=True)
 
 # 자연어 호출 (quetta_auto가 자동 라우팅)
 quetta_auto(request="이 논문 분석해줘", file_path="/data/paper.pdf")
+
+# === 인제스트 후 질의 ===
+quetta_paper_query(list=True)                              # 저장된 논문 목록
+quetta_paper_query(query="저자의 self-attention 동기")     # 전체 논문 대상
+quetta_paper_query(query="실험 결과 표", filename="attention.pdf")  # 특정 논문만
+```
+
+**RAG 통합 흐름:**
+```
+PDF 업로드 → Nougat + Gemini + Claude 분석
+              │
+              ▼
+         RAG 자동 인제스트 (메타데이터: type=paper, filename, file_id)
+              │
+              ├── Nougat 본문 → 섹션/청크 단위로 분할 저장
+              ├── Claude 종합 → 1개 문서 (source: paper:<fn>#synthesis)
+              └── Gemini 시각분석 → 1개 문서 (source: paper:<fn>#gemini)
+              │
+              ▼
+    이후 `quetta_paper_query` 또는 `quetta_ask`로 질의 시
+    자동으로 참조 가능 (vector search → Claude 답변)
 ```
 
 **필요 환경:**
@@ -416,7 +445,14 @@ quetta_upload_process_all()                            # 미처리 파일 일괄
 
 ## 변경 이력
 
-### v0.9.1 (최신)
+### v0.10.0 (최신)
+- **논문 RAG 자동 인제스트** — `quetta_analyze_paper` 가 분석 후 결과를 RAG에 자동 저장
+- 새 도구 `quetta_paper_query` — 저장된 논문 검색/질의 (특정 논문 필터 지원)
+- Nougat 본문은 섹션/청크 단위 분할 저장, Claude 종합·Gemini 시각분석은 단일 문서
+- `quetta_auto` 에 paper_query 의도 추가 ("저장된 논문에서 찾아줘" 자동 라우팅)
+- 메타데이터: `type=paper`, `filename`, `file_id`, `chunk_idx`, `part` (body/synthesis/gemini_vision)
+
+### v0.9.1
 - Gemini를 API 키 대신 **`gemini` CLI subprocess**로 전환 (OAuth 캐시 사용, API 키 불필요)
 - 환경변수 변경: `GOOGLE_API_KEY` 제거 → `GEMINI_CLI` 추가
 
