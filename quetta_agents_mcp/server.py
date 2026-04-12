@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.9.0"
+VERSION          = "0.9.1"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -72,8 +72,8 @@ RAG_KEY          = os.getenv("QUETTA_RAG_KEY",    "rag-claude-key-2026")     # X
 REMOTE_AGENT_ID = os.getenv("QUETTA_REMOTE_AGENT_ID", "")
 
 # 논문 분석 (Nougat + Gemini Vision)
-GOOGLE_API_KEY  = os.getenv("GOOGLE_API_KEY",  os.getenv("GEMINI_API_KEY", ""))
-GEMINI_MODEL    = os.getenv("GEMINI_MODEL",    "gemini-2.0-flash-exp")
+GEMINI_CLI      = os.getenv("GEMINI_CLI",      "gemini")                        # Gemini CLI path
+GEMINI_MODEL    = os.getenv("GEMINI_MODEL",    "gemini-2.5-pro")                # CLI 기본 모델
 NOUGAT_REPO     = os.getenv("NOUGAT_REPO",     "git+https://github.com/choyunsung/nougat")
 
 server = Server("quetta-agents")
@@ -393,44 +393,54 @@ async def _run_nougat_on_agent(agent_id: str, pdf_url: str, pdf_token: str = "")
 
 
 async def _gemini_analyze_pdf(pdf_bytes: bytes, query: str = "") -> str:
-    """Gemini File API로 PDF 전송 → 이미지/수식/도표 분석."""
-    if not GOOGLE_API_KEY:
-        return "_(Gemini 건너뜀 — GOOGLE_API_KEY 미설정)_"
+    """Gemini CLI로 PDF 분석 (subprocess, API 키 불필요 — OAuth 캐시 사용)."""
+    import shutil, tempfile
 
-    prompt = (
-        "다음 논문 PDF의 **그림·도표·수식·알고리즘 다이어그램**을 중심으로 분석해주세요.\n"
-        "- 각 Figure/Table의 제목과 핵심 메시지\n"
-        "- 주요 수식의 의미와 변수 정의\n"
-        "- 시각적 요소(아키텍처, 플로우차트, 결과 그래프)의 해석\n"
-        "- 본문과 그림의 관계\n"
-    )
-    if query:
-        prompt += f"\n추가 초점: {query}\n"
+    if not shutil.which(GEMINI_CLI):
+        return f"_(Gemini CLI('{GEMINI_CLI}') 미설치 — `npm i -g @google/gemini-cli` 후 `gemini` 실행해 OAuth 로그인)_"
 
-    async with httpx.AsyncClient(timeout=300) as client:
-        # inline_data 방식 (≤20MB): base64
-        b64 = base64.b64encode(pdf_bytes).decode()
-        resp = await client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-            params={"key": GOOGLE_API_KEY},
-            json={
-                "contents": [{
-                    "parts": [
-                        {"inline_data": {"mime_type": "application/pdf", "data": b64}},
-                        {"text": prompt},
-                    ],
-                }],
-                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 8192},
-            },
+    # PDF를 임시 파일에 저장 (Gemini CLI의 @filepath 구문 사용)
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        f.write(pdf_bytes)
+        pdf_path = f.name
+
+    try:
+        prompt = (
+            f"다음 논문 PDF(@{pdf_path})의 **그림·도표·수식·알고리즘 다이어그램**을 중심으로 분석해주세요.\n\n"
+            "- 각 Figure/Table의 제목과 핵심 메시지\n"
+            "- 주요 수식의 의미와 변수 정의\n"
+            "- 시각적 요소(아키텍처, 플로우차트, 결과 그래프)의 해석\n"
+            "- 본문과 그림의 관계\n"
+            "한글로 답해주세요.\n"
         )
-        if resp.status_code != 200:
-            return f"_(Gemini 실패 {resp.status_code}: {resp.text[:300]})_"
-        data = resp.json()
-        cands = data.get("candidates", [])
-        if not cands:
-            return "_(Gemini 응답 없음)_"
-        parts = cands[0].get("content", {}).get("parts", [])
-        return "\n".join(p.get("text", "") for p in parts).strip()
+        if query:
+            prompt += f"\n추가 초점: {query}\n"
+
+        # gemini -m MODEL -p "prompt" — stdout이 응답
+        proc = await asyncio.create_subprocess_exec(
+            GEMINI_CLI, "-m", GEMINI_MODEL, "-p", prompt,
+            "--approval-mode", "yolo",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return "_(Gemini CLI 타임아웃 5분)_"
+
+        if proc.returncode != 0:
+            err = (stderr or b"").decode(errors="replace")[:500]
+            return f"_(Gemini CLI 실패 rc={proc.returncode}: {err})_"
+
+        out = (stdout or b"").decode(errors="replace").strip()
+        # "Loaded cached credentials." 같은 첫 줄 제거
+        lines = [ln for ln in out.splitlines() if not ln.startswith("Loaded cached")]
+        return "\n".join(lines).strip() or "_(Gemini CLI 응답 비어있음)_"
+    finally:
+        try: os.unlink(pdf_path)
+        except: pass
 
 
 async def _claude_synthesize_paper(
@@ -938,13 +948,13 @@ async def list_tools() -> list[Tool]:
             description=(
                 "**학술 논문 완벽 분석** — Nougat (OCR, GPU) + Gemini Vision + Claude 종합 파이프라인.\n\n"
                 "1. **Nougat**: PDF → 수식·표·구조가 보존된 고품질 Markdown (GPU 에이전트에서 실행)\n"
-                "2. **Gemini**: PDF 그대로 vision 분석 — Figure/Table/수식 시각 해석\n"
+                "2. **Gemini CLI**: 서버에 설치된 `gemini` CLI(OAuth 기반, API 키 불필요)로 시각 분석\n"
                 "3. **Claude**: 두 결과를 통합해 논문을 완전히 이해할 수 있는 한글 분석 리포트 생성\n\n"
                 "입력 방법 (둘 중 하나):\n"
                 "  - `file_path`: 서버 로컬 PDF 경로\n"
                 "  - `file_id`: `quetta_upload_file` 로 이미 업로드된 PDF ID\n\n"
                 "GPU 에이전트 미연결 시 자동으로 설치 링크 유도.\n"
-                "GOOGLE_API_KEY 미설정 시 Gemini 단계는 건너뜀."
+                "`gemini` CLI 미설치/미로그인 시 Gemini 단계는 자동 건너뜀."
             ),
             inputSchema={
                 "type": "object",
@@ -1596,23 +1606,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             nougat_md = f"_(Nougat 실행 실패: {e})_"
             progress.append(f"  → ❌ nougat 실패: {e}")
 
-        # 3) Gemini Vision
+        # 3) Gemini Vision (CLI subprocess)
         gemini_out = ""
-        if not skip_gemini and GOOGLE_API_KEY:
+        import shutil
+        if not skip_gemini and shutil.which(GEMINI_CLI):
             try:
-                # Gemini inline_data 한도 ≈ 20MB
-                if len(pdf_bytes) > 20 * 1024 * 1024:
-                    gemini_out = "_(PDF가 20MB 초과 — Gemini 건너뜀)_"
-                else:
-                    gemini_out = await _gemini_analyze_pdf(pdf_bytes, query)
-                progress.append(f"**4/4**  Gemini 분석 완료: {len(gemini_out):,} chars")
+                gemini_out = await _gemini_analyze_pdf(pdf_bytes, query)
+                progress.append(f"**4/4**  Gemini CLI 분석 완료: {len(gemini_out):,} chars")
             except Exception as e:
                 gemini_out = f"_(Gemini 실패: {e})_"
                 progress.append(f"**4/4**  ❌ Gemini 실패: {e}")
         elif skip_gemini:
             progress.append(f"**4/4**  Gemini 건너뜀 (skip_gemini=True)")
         else:
-            progress.append(f"**4/4**  Gemini 건너뜀 (GOOGLE_API_KEY 미설정)")
+            progress.append(f"**4/4**  Gemini 건너뜀 (CLI '{GEMINI_CLI}' 미설치)")
 
         # 4) Claude 종합
         if skip_claude:

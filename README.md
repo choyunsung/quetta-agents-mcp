@@ -174,8 +174,14 @@ quetta_auto(request="이 파일 분석해줘", file_path="/data/patient.csv")
 
 **파이프라인:**
 1. **Nougat** (GPU 에이전트): PDF → 수식·표·구조가 보존된 고품질 Markdown (`choyunsung/nougat` fork 사용)
-2. **Gemini Vision**: PDF 원본을 직접 분석해 Figure/Table/수식 시각 해석
+2. **Gemini CLI**: 서버에 설치된 `gemini` CLI(`@google/gemini-cli`, OAuth 기반) — API 키 불필요, 무료 쿼터 사용
 3. **Claude**: 두 결과 통합 → 제목/초록/방법론/결과/한계까지 상세 한글 분석
+
+**Gemini CLI 설치** (서버/Mac 1회만):
+```bash
+npm i -g @google/gemini-cli
+gemini  # 첫 실행 시 Google OAuth 로그인 (브라우저 열림) — 이후 자동 캐시 사용
+```
 
 **사용 예시:**
 ```python
@@ -194,7 +200,7 @@ quetta_auto(request="이 논문 분석해줘", file_path="/data/paper.pdf")
 
 **필요 환경:**
 - GPU 에이전트 연결 (nougat는 torch + CUDA 필요) — 자동 설치 옵션 제공
-- `GOOGLE_API_KEY` 환경변수 (Gemini 사용 시) — 미설정이어도 Nougat+Claude만으로 동작
+- `gemini` CLI 설치 + OAuth 로그인 (선택) — 미설치여도 Nougat+Claude만으로 동작
 
 ### 📁 파일 업로드 & 분석
 
@@ -402,19 +408,22 @@ quetta_upload_process_all()                            # 미처리 파일 일괄
 | `QUETTA_TUSD_TOKEN` | _(없음)_ | tusd X-API-Token (nginx 경유 외부 접근 시) |
 | `QUETTA_RAG_KEY` | `rag-claude-key-2026` | RAG API X-API-Key |
 | `QUETTA_REMOTE_AGENT_ID` | _(없음)_ | 기본 원격 에이전트 ID (미지정 시 자동 선택) |
-| `GOOGLE_API_KEY` | _(없음)_ | Gemini Vision API 키 (`quetta_analyze_paper` 논문 그림 분석용) |
-| `GEMINI_MODEL` | `gemini-2.0-flash-exp` | 사용할 Gemini 모델 |
+| `GEMINI_CLI` | `gemini` | Gemini CLI 실행 파일 경로 (`@google/gemini-cli`) |
+| `GEMINI_MODEL` | `gemini-2.5-pro` | 사용할 Gemini 모델 |
 | `NOUGAT_REPO` | `git+https://github.com/choyunsung/nougat` | nougat 설치 출처 |
 
 ---
 
 ## 변경 이력
 
-### v0.9.0 (최신)
+### v0.9.1 (최신)
+- Gemini를 API 키 대신 **`gemini` CLI subprocess**로 전환 (OAuth 캐시 사용, API 키 불필요)
+- 환경변수 변경: `GOOGLE_API_KEY` 제거 → `GEMINI_CLI` 추가
+
+### v0.9.0
 - **논문 완벽 분석** `quetta_analyze_paper` 추가
-- Nougat (GPU OCR) + Gemini Vision + Claude 3단 파이프라인
+- Nougat (GPU OCR) + Gemini + Claude 3단 파이프라인
 - `quetta_auto` 에 paper_analysis 의도 추가 (최상위 우선순위)
-- 환경변수: `GOOGLE_API_KEY`, `GEMINI_MODEL`, `NOUGAT_REPO`
 
 ### v0.8.0
 - **스마트 디스패처** `quetta_auto` 추가 — 자연어 요청을 자동 분류해 적절한 도구로 라우팅
