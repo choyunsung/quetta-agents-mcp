@@ -48,17 +48,41 @@ if (-not $pythonw) {
 }
 Write-Host "  pythonw: $pythonw"
 
-# NSSM 설치
+# NSSM 설치 (GitHub raw 우선, 실패 시 nssm.cc HTTP 폴백)
 if (-not (Test-Path $NssmExe)) {
     Write-Host "▶ NSSM 다운로드 중..."
-    $tempZip = "$env:TEMP\nssm.zip"
-    Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $tempZip -UseBasicParsing
-    $tempDir = "$env:TEMP\nssm-extract"
-    Expand-Archive -Path $tempZip -DestinationPath $tempDir -Force
-    # 64비트 우선
-    $arch = if ([Environment]::Is64BitOperatingSystem) { "win64" } else { "win32" }
-    Copy-Item "$tempDir\nssm-2.24\$arch\nssm.exe" $NssmExe -Force
-    Remove-Item $tempZip,$tempDir -Recurse -Force
+    $arch = if ([Environment]::Is64BitOperatingSystem) { "nssm.exe" } else { "nssm-win32.exe" }
+    $sources = @(
+        "https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/bin/$arch",
+        "https://github.com/choyunsung/quetta-agents-mcp/raw/master/bin/$arch"
+    )
+    $ok = $false
+    foreach ($url in $sources) {
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $NssmExe -UseBasicParsing -TimeoutSec 30
+            if ((Get-Item $NssmExe -ErrorAction SilentlyContinue).Length -gt 100000) {
+                $ok = $true
+                Write-Host "  ✓ GitHub에서 NSSM 다운로드: $url"
+                break
+            }
+        } catch { Write-Host "  → $url 실패" }
+    }
+    if (-not $ok) {
+        Write-Host "  → nssm.cc HTTP 폴백 시도..."
+        try {
+            $tempZip = "$env:TEMP\nssm.zip"
+            Invoke-WebRequest -Uri "http://nssm.cc/release/nssm-2.24.zip" -OutFile $tempZip -UseBasicParsing -TimeoutSec 60
+            $tempDir = "$env:TEMP\nssm-extract"
+            Expand-Archive -Path $tempZip -DestinationPath $tempDir -Force
+            $subArch = if ([Environment]::Is64BitOperatingSystem) { "win64" } else { "win32" }
+            Copy-Item "$tempDir\nssm-2.24\$subArch\nssm.exe" $NssmExe -Force
+            Remove-Item $tempZip,$tempDir -Recurse -Force
+            $ok = $true
+        } catch {
+            Write-Host "❌ NSSM 다운로드 실패. 수동으로 https://nssm.cc 에서 받아 $NssmExe 에 두세요." -ForegroundColor Red
+            exit 1
+        }
+    }
     Write-Host "  ✓ NSSM 설치: $NssmExe"
 }
 
