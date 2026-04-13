@@ -241,6 +241,50 @@ PDF 업로드 → Nougat + Gemini + Claude 분석
 | `quetta_upload_process` | 업로드된 파일을 RAG 지식베이스에 인제스트 |
 | `quetta_upload_process_all` | 미처리 파일 전체 일괄 인제스트 |
 
+### 🧠 공유 메모리 (멀티 계정 동기화)
+
+| 도구 | 설명 |
+|------|------|
+| `quetta_memory_save` | 기억/메모를 공유 RAG에 영구 저장 |
+| `quetta_memory_recall` | 공유 메모리에서 의미 검색 |
+| `quetta_memory_list` | 내가 저장한 사용자 메모리 목록 |
+
+**동작 원리:**
+
+여러 Claude Code 계정에서 동일한 Quetta 서버(`QUETTA_GATEWAY_URL`)를 사용하면, 모든 계정이 같은 RAG 지식베이스를 공유합니다. 따라서 한 계정에서 저장한 메모리는 다른 계정에서도 바로 조회·참조 가능합니다.
+
+**자동 / 수동 저장:**
+
+| 방식 | 동작 |
+|------|------|
+| 자동 (모든 Q&A) | `quetta_ask`/`quetta_auto` 사용 시 Q&A가 자동 RAG 저장 (`gateway save_qa`) |
+| 수동 (고정 사실) | `quetta_memory_save(text="...")` 로 사용자 메모리 저장 |
+
+**자동 주입:**
+
+어떤 질문이든 `quetta_ask`/`quetta_auto` 호출 시 Gateway RAG harness가 관련 메모리를 자동으로 찾아 LLM 컨텍스트에 주입합니다 — 별도 검색 호출 불필요.
+
+**사용 예시:**
+
+```python
+# 기억 저장
+quetta_memory_save(
+    text="사용자는 MCG 연구자. KRISS 96채널 SQUID 시스템 사용.",
+    tags=["profile", "mcg"],
+)
+
+# 자연어로도 자동 라우팅
+quetta_auto(request="기억해줘: 이 프로젝트는 Python 3.11 + FastAPI 기반이다")
+# → memory_save 의도 감지 → quetta_memory_save
+
+# 검색 (명시적)
+quetta_memory_recall(query="MCG 시스템 채널 수")
+
+# 또는 그냥 질문만 (자동 RAG 주입)
+quetta_ask(query="내가 어떤 시스템을 쓰고 있지?")
+# → Gateway harness가 관련 메모리 자동 주입 → Claude 답변
+```
+
 ### 🔧 버전 관리
 
 | 도구 | 설명 |
@@ -457,7 +501,13 @@ python3 scripts/build-docs-pdf.py
 
 ## 변경 이력
 
-### v0.11.0 (최신)
+### v0.12.0 (최신)
+- **공유 메모리 시스템** — 멀티 Claude Code 계정 간 기억 동기화
+- `quetta_memory_save` / `quetta_memory_recall` / `quetta_memory_list` 추가
+- `quetta_auto` 에 memory_save / memory_recall / memory_list 의도 (최상위)
+- "기억해줘: X" → 자동 저장 / "전에 뭐였지?" → 자동 검색
+
+### v0.11.0
 - **설계도 분석** `quetta_analyze_blueprint` 추가 (기계/전기/CPLD, PDF/PNG)
 - PyMuPDF 벡터 텍스트 추출 + Gemini Vision + Claude 종합
 - 설계도 RAG 자동 인제스트 + `quetta_blueprint_query` 질의 도구

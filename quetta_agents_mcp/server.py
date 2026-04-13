@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.11.0"
+VERSION          = "0.12.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -829,6 +829,17 @@ _INTENT_RULES = {
         "설계", "architecture", "아키텍처", "전체 구성", "시스템 설계",
         "복잡한", "여러 관점", "multi-step", "step by step 깊이",
     ],
+    "memory_save": [
+        "기억해줘", "기억해", "저장해줘", "메모해", "메모 저장", "외워줘",
+        "remember this", "save this", "note this",
+    ],
+    "memory_recall": [
+        "뭐였지", "전에 뭐", "기억나?", "저번에", "지난번", "저장된 기억",
+        "내 메모", "recall memory", "what did i",
+    ],
+    "memory_list": [
+        "기억 목록", "저장된 메모", "내 기억", "memory list",
+    ],
 }
 
 
@@ -839,7 +850,8 @@ def _classify_intent(text: str) -> tuple[str, list[str]]:
              > medical > code > multi_agent > question (기본값)
     """
     low = text.lower()
-    priority = ["blueprint_query", "blueprint_analysis", "paper_query", "paper_analysis",
+    priority = ["memory_save", "memory_recall", "memory_list",
+                "blueprint_query", "blueprint_analysis", "paper_query", "paper_analysis",
                 "gpu_compute", "screenshot", "remote_shell",
                 "file_analysis", "medical", "code", "multi_agent"]
     for intent in priority:
@@ -1354,6 +1366,59 @@ async def list_tools() -> list[Tool]:
                                  "description": "true면 질의 대신 인제스트된 논문 목록 반환"},
                     "top_k":    {"type": "integer", "default": 8,
                                  "description": "RAG 검색 반환 개수"},
+                },
+            },
+        ),
+        Tool(
+            name="quetta_memory_save",
+            description=(
+                "**공유 메모리에 기억 저장** — 멀티 계정/세션에서 공유되는 영구 기억을 RAG에 저장합니다.\n"
+                "여러 Claude Code 계정에서 동일한 Quetta 서버를 쓰면 모든 계정이 이 기억을 조회할 수 있습니다.\n\n"
+                "사용 예:\n"
+                "  - '사용자는 MCG 연구자이며 KRISS 96채널 시스템 사용' 같은 고정 사실 저장\n"
+                "  - 프로젝트 결정사항, 선호 사항, 자주 쓰는 명령어 등\n"
+                "  - 세션 간 컨텍스트 유지용"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "text":   {"type": "string", "description": "저장할 내용 (필수)"},
+                    "tags":   {"type": "array", "items": {"type": "string"}, "default": []},
+                    "source": {"type": "string", "default": "user-memory",
+                                "description": "출처 태그 (기본 user-memory)"},
+                },
+                "required": ["text"],
+            },
+        ),
+        Tool(
+            name="quetta_memory_recall",
+            description=(
+                "**공유 메모리에서 의미 검색** — 저장된 기억과 모든 인제스트된 문서에서 관련 내용을 찾습니다.\n"
+                "Claude Code 어느 계정에서 저장했든 동일한 Quetta 서버 사용 시 자동 공유.\n\n"
+                "참고: `quetta_ask`도 내부적으로 RAG harness를 통해 자동 검색하지만,\n"
+                "이 도구는 **명시적으로 검색 결과만 반환** (LLM 답변 없이)하여 빠른 확인 용도."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "검색 쿼리 (필수)"},
+                    "limit": {"type": "integer", "default": 8},
+                    "filter_source": {"type": "string", "default": "",
+                                       "description": "(선택) 특정 source만 필터 (e.g. user-memory)"},
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="quetta_memory_list",
+            description=(
+                "최근 저장된 사용자 메모리(`source=user-memory`) 목록을 반환합니다.\n"
+                "다른 문서나 자동 저장된 Q&A는 제외, 사용자가 명시적으로 저장한 것만."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "default": 20},
                 },
             },
         ),
@@ -2322,6 +2387,98 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             f"---\n\n{answer}"
         ))]
 
+    # ── 공유 메모리 (멀티 계정 간 동기화) ──────────────────────────────────────
+    elif name == "quetta_memory_save":
+        text = arguments["text"].strip()
+        tags = arguments.get("tags", [])
+        source = arguments.get("source", "user-memory")
+        if not text:
+            return [TextContent(type="text", text="❌ text가 비어있습니다.")]
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{RAG_URL}/ingest",
+                headers=_rag_headers(),
+                json={
+                    "text": text,
+                    "source": source,
+                    "metadata": {"tags": tags, "kind": "user-memory"},
+                    "update_mode": "extend",
+                    "update_threshold": 0.90,
+                },
+            )
+            resp.raise_for_status()
+        return [TextContent(type="text", text=(
+            f"✅ **메모리 저장 완료**\n\n"
+            f"- source: `{source}`\n"
+            f"- tags: {tags or '(없음)'}\n"
+            f"- 길이: {len(text):,} chars\n\n"
+            f"이후 어느 Claude Code 계정에서든 `quetta_memory_recall` 또는 `quetta_ask`로 자동 참조됩니다."
+        ))]
+
+    elif name == "quetta_memory_recall":
+        q = arguments["query"].strip()
+        limit = arguments.get("limit", 8)
+        filter_source = arguments.get("filter_source", "").strip()
+        if not q:
+            return [TextContent(type="text", text="❌ query가 비어있습니다.")]
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{RAG_URL}/search",
+                headers=_rag_headers(),
+                json={"query": q, "limit": max(limit * 2, 15), "mode": "hybrid"},
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            hits = body if isinstance(body, list) else body.get("sources") or body.get("results") or []
+
+        if filter_source:
+            hits = [h for h in hits if h.get("source", "") == filter_source]
+        hits = hits[:limit]
+
+        if not hits:
+            return [TextContent(type="text", text=f"관련 기억을 찾지 못했습니다.")]
+
+        lines = [f"## 🧠 메모리 검색 결과 ({len(hits)}개)\n"]
+        for i, h in enumerate(hits, 1):
+            score = h.get("score", 0)
+            src = h.get("source", "?")
+            text = (h.get("text") or h.get("content") or "")[:400]
+            meta = h.get("metadata", {}) or {}
+            tags = meta.get("tags", [])
+            lines.append(f"### {i}. [{src}] score={score:.2f}")
+            if tags: lines.append(f"_tags: {', '.join(tags)}_")
+            lines.append(f"{text}")
+            lines.append("")
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "quetta_memory_list":
+        limit = arguments.get("limit", 20)
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                f"{RAG_URL}/search",
+                headers=_rag_headers(),
+                json={"query": "사용자 메모리 user memory", "limit": 100, "mode": "hybrid"},
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            hits = body if isinstance(body, list) else body.get("sources") or body.get("results") or []
+
+        mine = [h for h in hits if h.get("source", "") == "user-memory"][:limit]
+        if not mine:
+            return [TextContent(type="text", text="저장된 사용자 메모리가 없습니다. `quetta_memory_save`로 저장하세요.")]
+
+        lines = [f"## 내 메모리 ({len(mine)}개)\n"]
+        for i, h in enumerate(mine, 1):
+            text = (h.get("text") or "")[:200]
+            meta = h.get("metadata", {}) or {}
+            tags = meta.get("tags", [])
+            lines.append(f"**{i}.** {text}")
+            if tags: lines.append(f"   _tags: {', '.join(tags)}_")
+            lines.append("")
+        return [TextContent(type="text", text="\n".join(lines))]
+
     # ── quetta_auto (스마트 디스패처) ─────────────────────────────────────────
     elif name == "quetta_auto":
         req       = arguments["request"]
@@ -2339,7 +2496,25 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         # 의도별 내부 dispatch
         try:
-            if intent == "blueprint_query":
+            if intent == "memory_save":
+                # "기억해줘: X" 패턴에서 X 추출
+                body = req
+                for prefix in ("기억해줘", "기억해", "저장해줘", "메모해", "외워줘", "remember this", "save this", "note this"):
+                    if body.lower().startswith(prefix):
+                        body = body[len(prefix):].strip(":：， ").strip()
+                        break
+                result = await call_tool("quetta_memory_save", {"text": body or req})
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "memory_recall":
+                result = await call_tool("quetta_memory_recall", {"query": req})
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "memory_list":
+                result = await call_tool("quetta_memory_list", {})
+                return [TextContent(type="text", text=route_info), *result]
+
+            elif intent == "blueprint_query":
                 result = await call_tool("quetta_blueprint_query", {"query": req})
                 return [TextContent(type="text", text=route_info), *result]
 
