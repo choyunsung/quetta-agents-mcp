@@ -38,25 +38,30 @@ except ImportError:
     _pip_install("websockets")
     import websockets
 
+# GUI/스크린샷 모듈 — Service Session 0 등 비대화형 환경에서도 임포트 실패 허용
+# (단순 ImportError 가 아닌 RuntimeError, AttributeError 등 모두 catch)
+HAS_GUI = False
+HAS_SS = False
+_USE_MSS = False
 try:
     import pyautogui
     pyautogui.FAILSAFE = True
     HAS_GUI = True
-except ImportError:
-    HAS_GUI = False
+except Exception as _e:
+    print(f"⚠ pyautogui 초기화 실패 (비대화형 환경 OK): {_e}", flush=True)
 
 try:
     import mss
     from PIL import Image
     HAS_SS = True
     _USE_MSS = True
-except ImportError:
-    _USE_MSS = False
+except Exception as _e:
+    print(f"⚠ mss 초기화 실패: {_e}", flush=True)
     try:
         from PIL import ImageGrab, Image
         HAS_SS = True
-    except ImportError:
-        HAS_SS = False
+    except Exception as _e2:
+        print(f"⚠ PIL ImageGrab 도 실패: {_e2}", flush=True)
 
 
 # ── 명령 핸들러 ───────────────────────────────────────────────────────────────
