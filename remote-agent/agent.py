@@ -21,6 +21,13 @@ import platform
 import subprocess
 import sys
 
+# pythonw / Windows Service Session 0 환경: stdout/stderr가 None
+# print() 호출 시 AttributeError로 즉시 종료되는 것 방지
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 # ── 설정 ────────────────────────────────────────────────────────────────────
 
 AGENT_WS_URL = os.getenv("AGENT_WS_URL", "")
