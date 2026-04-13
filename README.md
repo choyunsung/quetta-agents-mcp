@@ -29,48 +29,88 @@
 
 ## 설치
 
-### 원클릭 설치 (Mac / Linux)
+Quetta MCP는 아무나 설치할 수 없습니다. **관리자가 공유한 Gist ID** 또는 **초대 토큰**이 필요합니다.
 
-관리자로부터 받은 **GitHub Gist ID** 또는 **Gateway 초대 토큰**으로 설치:
+### 사전 준비 (최초 1회)
 
 ```bash
-# 방식 A: GitHub Secret Gist (권장)
-gh auth login  # 한 번만
-QUETTA_GIST_ID="<관리자가_준_GIST_ID>" \
+# Mac
+brew install gh uv
+
+# Linux
+sudo apt install -y curl python3
+curl -LsSf https://astral.sh/uv/install.sh | sh     # uv 설치
+# gh는 https://cli.github.com/ 참고
+```
+
+### 방식 A: GitHub Secret Gist (권장) ⭐
+
+관리자가 Gist URL을 공유하면 팀원은 ID만 있으면 됩니다.
+
+```bash
+# 1) GitHub 인증 (최초 1회)
+gh auth login
+
+# 2) 설치 (Gist ID만 입력)
+QUETTA_GIST_ID="관리자가_준_GIST_ID" \
 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
 
-# 방식 B: Gateway 초대 토큰
-QUETTA_INSTALL_TOKEN="<관리자가_준_토큰>" \
-bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+# 3) Claude Code 재시작
+```
 
-# 방식 C: 직접 API 키 (개발자용)
-QUETTA_API_KEY="<키>" \
+**또는 PAT(Personal Access Token) 사용:**
+```bash
+GH_TOKEN=ghp_xxx \
+QUETTA_GIST_ID="..." \
 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
 ```
 
-대화형으로 실행하면 Gist ID 또는 초대 토큰 입력 프롬프트가 뜹니다.
+### 방식 B: Gateway 초대 토큰
 
-**설치 스크립트가 자동으로:**
-1. `uv` 미설치 시 자동 설치 (Mac Homebrew 경로 포함)
-2. GitHub HTTPS 우선 다운로드 (SSH 키 불필요)
-3. `claude mcp add-json` CLI로 등록 (user scope)
-4. **`QUETTA_GATEWAY_URL`, `QUETTA_API_KEY`, `QUETTA_RAG_URL`, `QUETTA_TUSD_URL`, `QUETTA_TUSD_TOKEN` 자동 주입** (공유 기본값)
-5. `~/.claude/CLAUDE.md` 에 세션 시작 시 공유 메모리 자동 로드 지시 추가
+GitHub 계정이 없거나 Gateway에서 직접 토큰을 받은 경우.
 
-**개인 키로 오버라이드 하려면:**
 ```bash
-QUETTA_API_KEY=your_personal_key \
+QUETTA_INSTALL_TOKEN="관리자가_준_토큰" \
 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+```
+
+### 방식 C: 직접 API 키 (개발자/로컬)
+
+이미 API 키를 직접 받은 경우.
+
+```bash
+QUETTA_API_KEY="본인_API_키" \
+QUETTA_GATEWAY_URL="https://rag.quetta-soft.com" \
+bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+```
+
+### 대화형 설치
+
+환경변수를 비워두고 실행하면 프롬프트가 뜹니다:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh | bash
+# → Gist ID (비우면 skip):
+# → 초대 토큰 (QUETTA_INSTALL_TOKEN):
 ```
 
 ### 설치 확인
 
 ```bash
 claude mcp list | grep quetta
-# quetta-agents: /path/to/uvx --from git+https://... quetta-agents-mcp - ✓ Connected
+# quetta-agents: uvx --from git+https://... quetta-agents-mcp - ✓ Connected
 ```
 
-### 수동 설치 (claude CLI 방식)
+**설치 스크립트가 자동으로 처리:**
+1. `uv` 미설치 시 자동 설치 (Mac Homebrew 경로 포함)
+2. 공개 GitHub HTTPS URL로 패키지 다운로드 (SSH 키 불필요)
+3. 선택한 방식으로 설정 수신 (Gist / 토큰 / 직접)
+4. `claude mcp add-json` CLI로 등록 (user scope)
+5. `~/.claude/CLAUDE.md` 에 세션 자동 초기화 지시 추가 (멀티 계정 공유 메모리)
+
+### 수동 설치 (claude CLI 직접)
+
+위 자동 설치가 안 되면 수동으로:
 
 ```bash
 claude mcp add-json quetta-agents '{
@@ -80,12 +120,48 @@ claude mcp add-json quetta-agents '{
     "QUETTA_GATEWAY_URL": "https://rag.quetta-soft.com",
     "QUETTA_ORCHESTRATOR_URL": "https://rag.quetta-soft.com/orchestrator",
     "QUETTA_API_KEY": "발급받은_API_키",
+    "QUETTA_RAG_URL": "https://rag.quetta-soft.com",
+    "QUETTA_TUSD_URL": "https://rag.quetta-soft.com",
+    "QUETTA_TUSD_TOKEN": "발급받은_TUSD_토큰",
     "QUETTA_TIMEOUT": "300"
   }
 }' --scope user
 ```
 
-> **로컬 실행 시:** `QUETTA_GATEWAY_URL=http://localhost:8701`, `QUETTA_API_KEY`는 비움
+> **로컬 서버 실행 시:** `QUETTA_GATEWAY_URL=http://localhost:8701`, `QUETTA_API_KEY`는 비움
+
+### 관리자용 — 권한 배포
+
+<details>
+<summary>Gist 또는 초대 토큰 발급 방법 (관리자만)</summary>
+
+**방식 A: GitHub Gist 생성**
+```bash
+cat > quetta-install-config.json <<EOF
+{
+  "gateway_url": "https://rag.quetta-soft.com",
+  "orchestrator_url": "https://rag.quetta-soft.com/orchestrator",
+  "api_key": "YOUR_API_KEY",
+  "rag_url": "https://rag.quetta-soft.com",
+  "tusd_url": "https://rag.quetta-soft.com",
+  "tusd_token": "YOUR_TUSD_TOKEN",
+  "rag_key": "rag-claude-key-2026",
+  "timeout": "300"
+}
+EOF
+gh gist create quetta-install-config.json -d "Quetta MCP config"
+# 반환된 Gist URL의 ID를 팀원에게 전달
+```
+
+**방식 B: 초대 토큰 발급 (서버에서)**
+```bash
+/data/quetta-agents/scripts/invite.sh create "팀원이름" 365
+# 출력된 QUETTA_INSTALL_TOKEN=... 명령어 전체를 팀원에게 전달
+```
+
+상세는 [docs/12-install-token.md](./docs/12-install-token.md) 참고.
+
+</details>
 
 설치 후 Claude Code를 재시작하면 적용됩니다.
 
