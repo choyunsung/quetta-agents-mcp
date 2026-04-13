@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>Quetta Agents MCP v0.13.2</title>
+<title>Quetta Agents MCP v0.14.0</title>
 <style>
 @page {
   size: A4;
@@ -88,12 +88,12 @@ hr { border: none; border-top: 1px solid #ccc; margin: 1.5em 0; }
       <div class="subtitle">사용자 매뉴얼 &amp; 기술 개요</div>
       <p>Smart LLM Gateway + 원격 PC 제어 + 문서·설계도 분석 + RAG 지식베이스</p>
       <div class="meta">
-        Version 0.13.2<br>
+        Version 0.14.0<br>
         Documentation Build<br>
         <span style="font-size:9pt;">https://github.com/choyunsung/quetta-agents-mcp</span>
       </div>
     </div>
-    <section class="toc"><h1>목차</h1><ul><li><a href="#doc-README">Quetta Agents MCP — 상세 문서</a></li><li><a href="#doc-01">01. 아키텍처 개요</a></li><li><a href="#doc-02">02. LLM 라우팅</a></li><li><a href="#doc-03">03. 스마트 디스패처 (`quetta_auto`)</a></li><li><a href="#doc-04">04. 원격 에이전트 (Remote Agent)</a></li><li><a href="#doc-05">05. 논문 분석 (Nougat + Gemini + Claude + RAG)</a></li><li><a href="#doc-06">06. 설계도 분석 (기계 / 전기 / CPLD)</a></li><li><a href="#doc-07">07. 파일 업로드 & RAG 통합</a></li><li><a href="#doc-08">08. 도구 레퍼런스</a></li><li><a href="#doc-09">09. 설치 & 설정</a></li><li><a href="#doc-10">10. 트러블슈팅</a></li><li><a href="#doc-11">11. 공유 메모리 & 멀티 계정</a></li><li><a href="#doc-12">12. 비공개 설치 시스템 (2가지 방식)</a></li><li><a href="#doc-13">13. 대화 히스토리 (NoSQL)</a></li></ul></section><section id="doc-README">
+    <section class="toc"><h1>목차</h1><ul><li><a href="#doc-README">Quetta Agents MCP — 상세 문서</a></li><li><a href="#doc-01">01. 아키텍처 개요</a></li><li><a href="#doc-02">02. LLM 라우팅</a></li><li><a href="#doc-03">03. 스마트 디스패처 (`quetta_auto`)</a></li><li><a href="#doc-04">04. 원격 에이전트 (Remote Agent)</a></li><li><a href="#doc-05">05. 논문 분석 (Nougat + Gemini + Claude + RAG)</a></li><li><a href="#doc-06">06. 설계도 분석 (기계 / 전기 / CPLD)</a></li><li><a href="#doc-07">07. 파일 업로드 & RAG 통합</a></li><li><a href="#doc-08">08. 도구 레퍼런스</a></li><li><a href="#doc-09">09. 설치 & 설정</a></li><li><a href="#doc-10">10. 트러블슈팅</a></li><li><a href="#doc-11">11. 공유 메모리 & 멀티 계정</a></li><li><a href="#doc-12">12. 비공개 설치 시스템 (2가지 방식)</a></li><li><a href="#doc-13">13. 대화 히스토리 (NoSQL)</a></li><li><a href="#doc-14">14. 워크스페이스 (멀티 테넌트)</a></li></ul></section><section id="doc-README">
 <h1 id="quetta-agents-mcp">Quetta Agents MCP — 상세 문서</h1>
 <p>Quetta Agents MCP는 <strong>LLM 스마트 라우팅 + 원격 PC(GPU) 제어 + 문서/도면 분석 + RAG 지식베이스</strong>를 하나의 MCP로 통합한 시스템입니다.</p>
 <h2 id="_1">📚 문서 목차</h2>
@@ -111,6 +111,7 @@ hr { border: none; border-top: 1px solid #ccc; margin: 1.5em 0; }
 <li><a href="#doc-11">공유 메모리 &amp; 멀티 계정</a> — RAG 지식베이스 공유, 세션 자동 초기화</li>
 <li><a href="#doc-12">초대 토큰 설치 시스템</a> — 관리자 토큰 발급, 팀원 배포</li>
 <li><a href="#doc-13">대화 히스토리 (NoSQL)</a> — MongoDB 자동 저장, 계정별/통합 조회</li>
+<li><a href="#doc-14">워크스페이스 (멀티 테넌트)</a> — 업무/개발 분리, 사용자별 ACL, 접근 요청/승인</li>
 </ol>
 <hr />
 <h2 id="_2">빠른 시작</h2>
@@ -3064,6 +3065,239 @@ quetta_history_stats()
 <li><a href="#doc-11">공유 메모리</a></li>
 <li><a href="#doc-12">초대 토큰 설치</a></li>
 <li><a href="#doc-08">도구 레퍼런스</a></li>
+</ul>
+</section>
+<section id="doc-14">
+<h1 id="14">14. 워크스페이스 (멀티 테넌트)</h1>
+<p>업무용 / 개발용 지식을 분리해서 사용자별로 접근 권한을 제어하는 기능.</p>
+<h2 id="_1">핵심 개념</h2>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>[Admin (master API key)]  ─ 모든 워크스페이스 접근
+    │
+    │ ACL 관리
+    ▼
+[Workspace: development]  ← 기본 생성
+[Workspace: business]     ← 기본 생성
+[Workspace: project-X]    ← 관리자가 추가 가능
+    │
+    ▼
+[사용자 A (api_key A)]  ← 관리자가 [&quot;development&quot;] 만 부여
+[사용자 B (api_key B)]  ← 관리자가 [&quot;business&quot;] 만 부여
+[사용자 C (api_key C)]  ← 관리자가 [&quot;development&quot;, &quot;business&quot;] 둘 다 부여
+</code></pre></div>
+
+<h2 id="_2">왜 필요한가</h2>
+<ul>
+<li><strong>비개발자 사용자</strong>는 개발 관련 RAG 내용이 섞이면 혼란스러움</li>
+<li><strong>업무 기밀</strong>은 개발자에게 불필요하고, 보안상 분리 필요</li>
+<li>한 RAG 인스턴스에서 <strong>네임스페이스로 격리</strong>하면서도 <strong>관리자는 전체 통합</strong> 뷰 보유</li>
+</ul>
+<h2 id="_3">자동 동작</h2>
+<table>
+<thead>
+<tr>
+<th>호출</th>
+<th>워크스페이스 동작</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>quetta_ask(...)</code></td>
+<td>사용자 허용 ws에서만 RAG 검색 (harness)</td>
+</tr>
+<tr>
+<td><code>quetta_ask(...)</code> 저장</td>
+<td>사용자 기본 ws에 저장 (<code>X-Workspace</code> 헤더로 override 가능)</td>
+</tr>
+<tr>
+<td><code>quetta_memory_save(text="...")</code></td>
+<td><code>workspace</code> 파라미터 또는 기본값</td>
+</tr>
+<tr>
+<td>Admin 호출</td>
+<td>전체 ws 조회/저장 가능</td>
+</tr>
+</tbody>
+</table>
+<h2 id="gateway">기본 워크스페이스 (Gateway 최초 실행 시 생성)</h2>
+<table>
+<thead>
+<tr>
+<th>이름</th>
+<th>레이블</th>
+<th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>development</code></td>
+<td>개발 지식</td>
+<td>코드, 아키텍처, 기술 스택, 트러블슈팅 (기본)</td>
+</tr>
+<tr>
+<td><code>business</code></td>
+<td>업무 지식</td>
+<td>프로젝트 결정사항, 회의록, 일정</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_4">사용자 도구</h2>
+<h3 id="quetta_workspace_list"><code>quetta_workspace_list</code></h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>quetta_workspace_list()
+<span style="color: #3D7B7B; font-style: italic"># → ## 내 워크스페이스 정보</span>
+<span style="color: #3D7B7B; font-style: italic">#    - user_hash: abc1234567890def</span>
+<span style="color: #3D7B7B; font-style: italic">#    - 관리자: ❌</span>
+<span style="color: #3D7B7B; font-style: italic">#    - 기본 워크스페이스: development</span>
+<span style="color: #3D7B7B; font-style: italic">#    - 접근 가능: [&#39;development&#39;]</span>
+<span style="color: #3D7B7B; font-style: italic">#</span>
+<span style="color: #3D7B7B; font-style: italic">#    ### 전체 워크스페이스</span>
+<span style="color: #3D7B7B; font-style: italic">#    - ✅ **development** (기본) — 개발 지식: 코드, 아키텍처, ...</span>
+<span style="color: #3D7B7B; font-style: italic">#    - 🔒 **business** — 업무 지식: 프로젝트 결정사항, ...</span>
+</code></pre></div>
+
+<h3 id="quetta_workspace_request"><code>quetta_workspace_request</code></h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>quetta_workspace_request(workspace<span style="color: #666666">=</span><span style="color: #BA2121">&quot;business&quot;</span>, reason<span style="color: #666666">=</span><span style="color: #BA2121">&quot;프로젝트 A 회의 참여&quot;</span>)
+<span style="color: #3D7B7B; font-style: italic"># → ⏳ 요청 접수됨 — 관리자 승인 대기 중</span>
+</code></pre></div>
+
+<h3 id="quetta_memory_save-workspace"><code>quetta_memory_save</code> (workspace 지정)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #3D7B7B; font-style: italic"># 업무 메모 (해당 워크스페이스 권한 필요)</span>
+quetta_memory_save(
+    text<span style="color: #666666">=</span><span style="color: #BA2121">&quot;2026-04-15 프로젝트 A 킥오프 미팅: 일정 결정됨 ...&quot;</span>,
+    workspace<span style="color: #666666">=</span><span style="color: #BA2121">&quot;business&quot;</span>,
+    tags<span style="color: #666666">=</span>[<span style="color: #BA2121">&quot;meeting&quot;</span>, <span style="color: #BA2121">&quot;project-A&quot;</span>],
+)
+
+<span style="color: #3D7B7B; font-style: italic"># 개발 메모 (기본)</span>
+quetta_memory_save(
+    text<span style="color: #666666">=</span><span style="color: #BA2121">&quot;Gateway 502 원인: Ollama 바인딩 127.0.0.1 → 0.0.0.0&quot;</span>,
+    workspace<span style="color: #666666">=</span><span style="color: #BA2121">&quot;development&quot;</span>,
+    tags<span style="color: #666666">=</span>[<span style="color: #BA2121">&quot;troubleshooting&quot;</span>],
+)
+</code></pre></div>
+
+<h2 id="master-api-key">관리자 도구 (master API key 필수)</h2>
+<h3 id="quetta_admin_requests"><code>quetta_admin_requests</code></h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>quetta_admin_requests()
+<span style="color: #3D7B7B; font-style: italic"># → ## ⏳ 대기 중인 접근 요청 (2건)</span>
+<span style="color: #3D7B7B; font-style: italic">#    - `abc1234567890def` → **business** (2026-04-13 15:30)</span>
+<span style="color: #3D7B7B; font-style: italic">#      이유: 프로젝트 A 회의 참여</span>
+</code></pre></div>
+
+<h3 id="quetta_admin_resolve"><code>quetta_admin_resolve</code> (승인/거부)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>quetta_admin_resolve(
+    user_hash<span style="color: #666666">=</span><span style="color: #BA2121">&quot;abc1234567890def&quot;</span>,
+    workspace<span style="color: #666666">=</span><span style="color: #BA2121">&quot;business&quot;</span>,
+    approve<span style="color: #666666">=</span><span style="color: #008000; font-weight: bold">True</span>,
+)
+<span style="color: #3D7B7B; font-style: italic"># → ✅ 승인됨</span>
+</code></pre></div>
+
+<h3 id="quetta_admin_grant-acl"><code>quetta_admin_grant</code> (일괄 ACL 설정)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #3D7B7B; font-style: italic"># 특정 사용자의 ACL 전체 교체</span>
+quetta_admin_grant(
+    user_hash<span style="color: #666666">=</span><span style="color: #BA2121">&quot;abc1234567890def&quot;</span>,
+    workspaces<span style="color: #666666">=</span>[<span style="color: #BA2121">&quot;development&quot;</span>, <span style="color: #BA2121">&quot;business&quot;</span>],  <span style="color: #3D7B7B; font-style: italic"># 전체 허용</span>
+)
+</code></pre></div>
+
+<h3 id="quetta_admin_create_workspace"><code>quetta_admin_create_workspace</code> (새 워크스페이스)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>quetta_admin_create_workspace(
+    name<span style="color: #666666">=</span><span style="color: #BA2121">&quot;project-healthcare&quot;</span>,
+    label<span style="color: #666666">=</span><span style="color: #BA2121">&quot;헬스케어 프로젝트&quot;</span>,
+    description<span style="color: #666666">=</span><span style="color: #BA2121">&quot;의료 프로젝트 전용 지식베이스&quot;</span>,
+)
+</code></pre></div>
+
+<h2 id="_5">흐름 예시</h2>
+<h3 id="1">시나리오 1: 비개발자 입사</h3>
+<ol>
+<li>Admin: <code>quetta_admin_create_workspace(name="ops", label="운영")</code></li>
+<li>신입: Gist로 설치 → <code>quetta_workspace_request(workspace="ops")</code></li>
+<li>Admin: <code>quetta_admin_requests()</code> → 확인</li>
+<li>Admin: <code>quetta_admin_resolve(user_hash="X", workspace="ops", approve=True)</code></li>
+<li>이후 신입의 모든 <code>quetta_ask</code> 는 <code>ops</code> 워크스페이스에서만 검색/저장</li>
+</ol>
+<h3 id="2">시나리오 2: 권한 분리</h3>
+<ul>
+<li>개발자: <code>development</code> 만 부여</li>
+<li>영업: <code>business</code> 만 부여</li>
+<li>PM: 두 워크스페이스 모두 부여</li>
+</ul>
+<p>각자 quetta_ask 하면 자기 권한 내 데이터만 보임.</p>
+<h3 id="3-admin">시나리오 3: Admin이 통합 조회</h3>
+<p>master API key 사용자는 <code>quetta_ask</code> 시 <strong>전체</strong> 워크스페이스에서 검색:
+- <code>X-Workspace: development</code> 헤더 주면 해당 ws만 한정
+- 헤더 없으면 전체 통합</p>
+<h2 id="_6">저장 메타데이터</h2>
+<p>모든 RAG 청크에 <code>workspace</code> 필드 자동 추가:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>{
+<span style="color: #bbbbbb">  </span><span style="color: #008000; font-weight: bold">&quot;text&quot;</span>:<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;...&quot;</span>,
+<span style="color: #bbbbbb">  </span><span style="color: #008000; font-weight: bold">&quot;source&quot;</span>:<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;quetta-gateway:business&quot;</span>,
+<span style="color: #bbbbbb">  </span><span style="color: #008000; font-weight: bold">&quot;metadata&quot;</span>:<span style="color: #bbbbbb"> </span>{
+<span style="color: #bbbbbb">    </span><span style="color: #008000; font-weight: bold">&quot;workspace&quot;</span>:<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;business&quot;</span>,
+<span style="color: #bbbbbb">    </span><span style="color: #008000; font-weight: bold">&quot;backend&quot;</span>:<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;claude-sonnet&quot;</span>,
+<span style="color: #bbbbbb">    </span><span style="border: 1px solid #FF0000">...</span>
+<span style="color: #bbbbbb">  </span>}
+}
+</code></pre></div>
+
+<h2 id="rest-api">REST API</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>권한</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/workspace/me</code></td>
+<td>누구나 (자기 정보)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/workspace/request</code></td>
+<td>누구나 (자기 요청)</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/workspace/create</code></td>
+<td>Admin</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/workspace/{name}</code></td>
+<td>Admin</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/workspace/acl/set</code></td>
+<td>Admin</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/workspace/acl</code></td>
+<td>Admin</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/workspace/requests?status=pending</code></td>
+<td>Admin</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/workspace/resolve</code></td>
+<td>Admin</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_7">관련 문서</h2>
+<ul>
+<li><a href="#doc-11">공유 메모리</a></li>
+<li><a href="#doc-12">설치 시스템</a></li>
+<li><a href="#doc-13">대화 히스토리</a></li>
 </ul>
 </section>
 </body>

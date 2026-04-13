@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.13.2"
+VERSION          = "0.14.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -1423,6 +1423,81 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="quetta_workspace_list",
+            description=(
+                "내 접근 가능 워크스페이스 목록 + 전체 워크스페이스 조회.\n\n"
+                "워크스페이스 개념:\n"
+                "  - 'development' (코드/기술)와 'business' (업무) 등으로 지식 분리\n"
+                "  - 내 계정은 관리자가 허용한 워크스페이스만 접근 가능\n"
+                "  - 관리자(master API key)는 모든 워크스페이스 접근"
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="quetta_workspace_request",
+            description=(
+                "새로운 워크스페이스 접근 권한을 요청합니다.\n"
+                "관리자가 승인하면 ACL에 반영되어 다음 요청부터 검색/저장 가능."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace": {"type": "string", "description": "접근 원하는 워크스페이스 이름"},
+                    "reason":    {"type": "string", "default": ""},
+                },
+                "required": ["workspace"],
+            },
+        ),
+        Tool(
+            name="quetta_admin_grant",
+            description=(
+                "[관리자 전용] 특정 사용자에게 워크스페이스 접근 권한 부여 (기존 ACL 덮어씀).\n"
+                "user_hash 는 `quetta_workspace_list` 또는 `quetta_admin_requests` 로 확인."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_hash":  {"type": "string"},
+                    "workspaces": {"type": "array", "items": {"type": "string"},
+                                   "description": "허용할 워크스페이스 리스트 (전체 교체)"},
+                },
+                "required": ["user_hash", "workspaces"],
+            },
+        ),
+        Tool(
+            name="quetta_admin_requests",
+            description="[관리자 전용] 대기 중인 워크스페이스 접근 요청 목록.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="quetta_admin_resolve",
+            description="[관리자 전용] 접근 요청 승인/거부.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "user_hash": {"type": "string"},
+                    "workspace": {"type": "string"},
+                    "approve":   {"type": "boolean"},
+                    "reason":    {"type": "string", "default": ""},
+                },
+                "required": ["user_hash", "workspace", "approve"],
+            },
+        ),
+        Tool(
+            name="quetta_admin_create_workspace",
+            description="[관리자 전용] 새 워크스페이스 생성.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name":        {"type": "string"},
+                    "label":       {"type": "string", "default": ""},
+                    "description": {"type": "string", "default": ""},
+                    "is_default":  {"type": "boolean", "default": False},
+                },
+                "required": ["name"],
+            },
+        ),
+        Tool(
             name="quetta_memory_save",
             description=(
                 "**공유 메모리에 기억 저장** — 멀티 계정/세션에서 공유되는 영구 기억을 RAG에 저장합니다.\n"
@@ -1435,10 +1510,11 @@ async def list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "text":   {"type": "string", "description": "저장할 내용 (필수)"},
-                    "tags":   {"type": "array", "items": {"type": "string"}, "default": []},
-                    "source": {"type": "string", "default": "user-memory",
-                                "description": "출처 태그 (기본 user-memory)"},
+                    "text":      {"type": "string", "description": "저장할 내용 (필수)"},
+                    "tags":      {"type": "array", "items": {"type": "string"}, "default": []},
+                    "source":    {"type": "string", "default": "user-memory"},
+                    "workspace": {"type": "string", "default": "",
+                                  "description": "저장할 워크스페이스 (미지정 시 기본값 — development). 'business' 등 구분 가능"},
                 },
                 "required": ["text"],
             },
@@ -2440,6 +2516,118 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             f"---\n\n{answer}"
         ))]
 
+    # ── 워크스페이스 (멀티 테넌트) ──────────────────────────────────────────────
+    elif name == "quetta_workspace_list":
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{GATEWAY_URL}/workspace/me", headers=_auth_headers())
+            resp.raise_for_status()
+            d = resp.json()
+        lines = [
+            f"## 내 워크스페이스 정보",
+            f"- user_hash: `{d.get('user_hash','?')}`",
+            f"- 관리자: {'✅' if d.get('is_admin') else '❌'}",
+            f"- 기본 워크스페이스: `{d.get('default','(없음)')}`",
+            f"- 접근 가능: {d.get('allowed', []) or '(없음 — 관리자에게 요청)'}",
+            "",
+            "### 전체 워크스페이스",
+        ]
+        for w in d.get("all_workspaces", []):
+            mark = "✅" if w.get("accessible") else "🔒"
+            def_mark = " (기본)" if w.get("is_default") else ""
+            lines.append(f"- {mark} **{w['name']}**{def_mark} — {w.get('label','')}: {w.get('description','')}")
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "quetta_workspace_request":
+        ws = arguments["workspace"]
+        reason = arguments.get("reason", "")
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{GATEWAY_URL}/workspace/request",
+                headers=_auth_headers(),
+                json={"workspace": ws, "reason": reason},
+            )
+            if resp.status_code != 200:
+                return [TextContent(type="text", text=f"❌ 요청 실패: {resp.text[:300]}")]
+            d = resp.json()
+        status_map = {
+            "already_granted": "✅ 이미 접근 권한이 있습니다.",
+            "pending": f"⏳ 요청 접수됨 — 관리자 승인 대기 중.",
+        }
+        return [TextContent(type="text", text=status_map.get(d.get("status"), str(d)))]
+
+    elif name == "quetta_admin_grant":
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{GATEWAY_URL}/workspace/acl/set",
+                headers=_auth_headers(),
+                json={"user_hash": arguments["user_hash"], "workspaces": arguments["workspaces"]},
+            )
+        if resp.status_code == 403:
+            return [TextContent(type="text", text="❌ 관리자 권한이 필요합니다 (master API key).")]
+        resp.raise_for_status()
+        d = resp.json()
+        return [TextContent(type="text", text=(
+            f"✅ ACL 설정 완료\n"
+            f"- 사용자: `{d['user_hash']}`\n"
+            f"- 허용된 워크스페이스: {d['workspaces']}"
+        ))]
+
+    elif name == "quetta_admin_requests":
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{GATEWAY_URL}/workspace/requests", headers=_auth_headers())
+        if resp.status_code == 403:
+            return [TextContent(type="text", text="❌ 관리자 권한 필요")]
+        resp.raise_for_status()
+        reqs = resp.json()
+        if not reqs:
+            return [TextContent(type="text", text="대기 중인 접근 요청 없음.")]
+        import datetime
+        lines = [f"## ⏳ 대기 중인 접근 요청 ({len(reqs)}건)\n"]
+        for r in reqs:
+            ts = datetime.datetime.fromtimestamp(r["requested_at"]).strftime("%Y-%m-%d %H:%M")
+            reason = f"\n  이유: {r.get('reason','-')}" if r.get("reason") else ""
+            lines.append(f"- `{r['user_hash']}` → **{r['workspace']}** ({ts}){reason}")
+        lines.append("\n승인: `quetta_admin_resolve(user_hash=..., workspace=..., approve=True)`")
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "quetta_admin_resolve":
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{GATEWAY_URL}/workspace/resolve",
+                headers=_auth_headers(),
+                json={
+                    "user_hash": arguments["user_hash"],
+                    "workspace": arguments["workspace"],
+                    "approve":   arguments["approve"],
+                    "reason":    arguments.get("reason", ""),
+                },
+            )
+        if resp.status_code == 403:
+            return [TextContent(type="text", text="❌ 관리자 권한 필요")]
+        if resp.status_code != 200:
+            return [TextContent(type="text", text=f"실패: {resp.text[:300]}")]
+        d = resp.json()
+        status = "✅ 승인됨" if d.get("approved") else "❌ 거부됨"
+        return [TextContent(type="text", text=f"{status}: `{arguments['user_hash']}` → **{arguments['workspace']}**")]
+
+    elif name == "quetta_admin_create_workspace":
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{GATEWAY_URL}/workspace/create",
+                headers=_auth_headers(),
+                json={
+                    "name": arguments["name"],
+                    "label": arguments.get("label", ""),
+                    "description": arguments.get("description", ""),
+                    "is_default": arguments.get("is_default", False),
+                },
+            )
+        if resp.status_code == 403:
+            return [TextContent(type="text", text="❌ 관리자 권한 필요")]
+        if resp.status_code != 200:
+            return [TextContent(type="text", text=f"실패: {resp.text[:300]}")]
+        return [TextContent(type="text", text=f"✅ 워크스페이스 생성: `{arguments['name']}`")]
+
     # ── 대화 히스토리 (MongoDB) ────────────────────────────────────────────────
     elif name == "quetta_history_list":
         mine_only = arguments.get("mine_only", True)
@@ -2610,8 +2798,19 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         text = arguments["text"].strip()
         tags = arguments.get("tags", [])
         source = arguments.get("source", "user-memory")
+        workspace = arguments.get("workspace", "").strip()
         if not text:
             return [TextContent(type="text", text="❌ text가 비어있습니다.")]
+
+        # workspace 자동 추정 (사용자 기본값 조회)
+        if not workspace:
+            try:
+                async with httpx.AsyncClient(timeout=5) as c:
+                    r = await c.get(f"{GATEWAY_URL}/workspace/me", headers=_auth_headers())
+                    if r.status_code == 200:
+                        workspace = r.json().get("default", "development")
+            except Exception:
+                workspace = "development"
 
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
@@ -2620,7 +2819,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 json={
                     "text": text,
                     "source": source,
-                    "metadata": {"tags": tags, "kind": "user-memory"},
+                    "metadata": {
+                        "tags": tags,
+                        "kind": "user-memory",
+                        "workspace": workspace,
+                    },
                     "update_mode": "extend",
                     "update_threshold": 0.90,
                 },
@@ -2628,10 +2831,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             resp.raise_for_status()
         return [TextContent(type="text", text=(
             f"✅ **메모리 저장 완료**\n\n"
+            f"- workspace: `{workspace}`\n"
             f"- source: `{source}`\n"
             f"- tags: {tags or '(없음)'}\n"
             f"- 길이: {len(text):,} chars\n\n"
-            f"이후 어느 Claude Code 계정에서든 `quetta_memory_recall` 또는 `quetta_ask`로 자동 참조됩니다."
+            f"이 워크스페이스에 접근 권한이 있는 사용자만 이 기억을 참조할 수 있습니다."
         ))]
 
     elif name == "quetta_memory_recall":

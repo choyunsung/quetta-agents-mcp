@@ -384,13 +384,27 @@ PDF 업로드 → Nougat + Gemini + Claude 분석
 | `quetta_upload_process` | 업로드된 파일을 RAG 지식베이스에 인제스트 |
 | `quetta_upload_process_all` | 미처리 파일 전체 일괄 인제스트 |
 
+### 🔐 워크스페이스 (업무/개발 분리)
+
+| 도구 | 설명 |
+|------|------|
+| `quetta_workspace_list` | 내 접근 가능 워크스페이스 + 전체 목록 |
+| `quetta_workspace_request` | 워크스페이스 접근 권한 요청 |
+| `quetta_admin_grant` | [Admin] 사용자에게 ACL 부여 |
+| `quetta_admin_requests` | [Admin] 대기 중 요청 조회 |
+| `quetta_admin_resolve` | [Admin] 요청 승인/거부 |
+| `quetta_admin_create_workspace` | [Admin] 새 워크스페이스 생성 |
+
+기본 워크스페이스: `development` (코드/기술), `business` (업무 지식). Admin이 추가 생성 가능. 비개발자 사용자는 `business`만 부여해 혼동 없이 사용 가능.
+
 ### 🧠 공유 메모리 (멀티 계정 동기화)
 
 | 도구 | 설명 |
 |------|------|
-| `quetta_memory_save` | 기억/메모를 공유 RAG에 영구 저장 |
+| `quetta_memory_save` | 기억/메모를 공유 RAG에 영구 저장 (워크스페이스 지정 가능) |
 | `quetta_memory_recall` | 공유 메모리에서 의미 검색 |
 | `quetta_memory_list` | 내가 저장한 사용자 메모리 목록 |
+| `quetta_session_init` | 세션 시작 시 자동 컨텍스트 로드 |
 
 **동작 원리:**
 
@@ -644,7 +658,17 @@ python3 scripts/build-docs-pdf.py
 
 ## 변경 이력
 
-### v0.13.2 (최신)
+### v0.14.0 (최신) — 워크스페이스 멀티 테넌트
+- **업무용/개발용 지식 분리** — `development`, `business` 등 워크스페이스로 격리
+- 사용자별 ACL: Admin이 접근 가능 워크스페이스 지정
+- 접근 요청/승인 시스템: 사용자가 `quetta_workspace_request` → Admin이 `quetta_admin_resolve`
+- Admin 도구: grant / requests / resolve / create_workspace
+- 사용자 도구: workspace_list / workspace_request
+- `quetta_memory_save` 에 `workspace` 파라미터 추가
+- `quetta_ask` RAG harness가 자동으로 사용자 허용 ws만 필터링
+- `X-Workspace` 헤더로 명시적 지정 가능
+
+### v0.13.2
 - **Windows PowerShell 설치 스크립트** 추가 (`install.ps1`)
   - `iwr -useb ... | iex` 한 줄 설치
   - Mac/Linux install.sh 와 동일한 3가지 방식 지원 (Gist/토큰/API 키)

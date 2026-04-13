@@ -27,6 +27,7 @@ ORDER = [
     "11-shared-memory.md",
     "12-install-token.md",
     "13-conversation-history.md",
+    "14-workspaces.md",
 ]
 
 try:
