@@ -29,15 +29,26 @@
 
 ## 설치
 
-### 원클릭 설치 (Mac / Linux) — 완전 자동
+### 원클릭 설치 (Mac / Linux)
+
+관리자로부터 받은 **GitHub Gist ID** 또는 **Gateway 초대 토큰**으로 설치:
 
 ```bash
-# 비대화형 (추천, 아무 입력도 필요 없음):
-QUETTA_NONINTERACTIVE=1 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+# 방식 A: GitHub Secret Gist (권장)
+gh auth login  # 한 번만
+QUETTA_GIST_ID="<관리자가_준_GIST_ID>" \
+bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
 
-# 대화형 (기본값으로 엔터만 눌러도 OK):
-curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh | bash
+# 방식 B: Gateway 초대 토큰
+QUETTA_INSTALL_TOKEN="<관리자가_준_토큰>" \
+bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+
+# 방식 C: 직접 API 키 (개발자용)
+QUETTA_API_KEY="<키>" \
+bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
 ```
+
+대화형으로 실행하면 Gist ID 또는 초대 토큰 입력 프롬프트가 뜹니다.
 
 **설치 스크립트가 자동으로:**
 1. `uv` 미설치 시 자동 설치 (Mac Homebrew 경로 포함)
@@ -505,7 +516,12 @@ python3 scripts/build-docs-pdf.py
 
 ## 변경 이력
 
-### v0.13.0 (최신)
+### v0.13.1 (최신)
+- **GitHub Secret Gist 기반 설치** 추가 — `QUETTA_GIST_ID` 환경변수로 Gist에서 설정 자동 로드
+- install.sh가 gh CLI 또는 GH_TOKEN으로 Gist 접근
+- 3가지 설치 방식 지원: Gist / Gateway 토큰 / 직접 API 키
+
+### v0.13.0
 - **대화 히스토리 자동 저장 (MongoDB)** — 모든 `quetta_ask`/`quetta_auto` 대화가 NoSQL에 기록
 - 계정별(API key hash) 누적 + 통합 조회 지원
 - 신규 도구: `quetta_history_list` / `quetta_history_get` / `quetta_history_stats`

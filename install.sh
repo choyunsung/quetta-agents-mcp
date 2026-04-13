@@ -8,9 +8,11 @@ set -e
 
 REPO_HTTPS="git+https://github.com/choyunsung/quetta-agents-mcp"
 REPO_SSH="git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
-GATEWAY_URL="${QUETTA_GATEWAY_URL:-https://rag.quetta-soft.com}"
+GATEWAY_URL="${QUETTA_GATEWAY_URL:-}"
+# Secret Gist ID (관리자가 공유) — gh CLI 인증 또는 GH_TOKEN 필요
+GIST_ID="${QUETTA_GIST_ID:-}"
 INSTALL_TOKEN="${QUETTA_INSTALL_TOKEN:-}"
-# 직접 키를 알고 있으면 아래도 override 가능 (일반적으로는 INSTALL_TOKEN으로 자동 조회)
+# 직접 키를 알고 있으면 아래도 override 가능
 API_KEY="${QUETTA_API_KEY:-}"
 RAG_URL="${QUETTA_RAG_URL:-}"
 TUSD_URL="${QUETTA_TUSD_URL:-}"
@@ -62,33 +64,101 @@ else
     error "Cannot install from GitHub. Check network or GitHub access."
 fi
 
-# ── 3. 초대 토큰 입력 / config 조회 ───────────────────────────────────────────
+# ── 3. Config 조회 (GitHub Gist → Gateway 토큰 → 직접 env) ────────────────────
 # 우선순위:
-#  1. QUETTA_API_KEY 환경변수가 있으면 그걸 그대로 사용 (직접 설정)
-#  2. QUETTA_INSTALL_TOKEN이 있으면 Gateway /install/config 로 설정 조회
-#  3. 둘 다 없고 TTY면 초대 토큰 입력 프롬프트
+#  1. QUETTA_API_KEY (env로 직접 제공)
+#  2. QUETTA_GIST_ID  (secret Gist에서 JSON 받아오기 — 권장)
+#  3. QUETTA_INSTALL_TOKEN (Gateway /install/config 조회)
+#  4. 둘 다 없으면 Gist ID 입력 프롬프트
 
-if [ -z "$API_KEY" ] && [ -z "$INSTALL_TOKEN" ] && [ -t 0 ] && [ "${QUETTA_NONINTERACTIVE:-0}" != "1" ]; then
+load_from_gist() {
+    local gist_id="$1"
+    local gist_json
+    # 방법 1: gh CLI 인증 (우선)
+    if command -v gh &>/dev/null && gh auth status &>/dev/null; then
+        gist_json=$(gh api "/gists/$gist_id" --jq '.files | to_entries[0].value.content' 2>/dev/null)
+    fi
+    # 방법 2: GH_TOKEN 환경변수
+    if [ -z "$gist_json" ] && [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
+        local tok="${GH_TOKEN:-$GITHUB_TOKEN}"
+        gist_json=$(curl -sf "https://api.github.com/gists/$gist_id" \
+            -H "Authorization: token $tok" \
+            -H "Accept: application/vnd.github+json" \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(iter(d['files'].values()))['content'])" 2>/dev/null)
+    fi
+    # 방법 3: public Gist (인증 불필요)
+    if [ -z "$gist_json" ]; then
+        gist_json=$(curl -sf "https://api.github.com/gists/$gist_id" \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(iter(d['files'].values()))['content'])" 2>/dev/null)
+    fi
+    echo "$gist_json"
+}
+
+if [ -z "$API_KEY" ] && [ -z "$GIST_ID" ] && [ -z "$INSTALL_TOKEN" ] \
+   && [ -t 0 ] && [ "${QUETTA_NONINTERACTIVE:-0}" != "1" ]; then
     echo ""
-    info "이 MCP는 **초대 토큰**을 받은 사용자만 설치할 수 있습니다."
-    info "관리자에게 토큰을 요청하거나 직접 QUETTA_API_KEY를 지정하세요."
-    printf "${YELLOW}초대 토큰 (QUETTA_INSTALL_TOKEN): ${NC}"
-    read -r INSTALL_TOKEN
+    info "관리자에게 받은 **Gist ID** 또는 **초대 토큰**을 입력하세요."
+    info "(Gist ID는 URL의 마지막 해시 부분: gist.github.com/user/<THIS>)"
+    printf "${YELLOW}Gist ID (비우면 skip): ${NC}"
+    read -r GIST_ID
+    if [ -z "$GIST_ID" ]; then
+        printf "${YELLOW}초대 토큰 (QUETTA_INSTALL_TOKEN): ${NC}"
+        read -r INSTALL_TOKEN
+    fi
 fi
 
-if [ -n "$INSTALL_TOKEN" ] && [ -z "$API_KEY" ]; then
-    info "초대 토큰 검증 중..."
-    CONFIG_JSON=$(curl -sf "$GATEWAY_URL/install/config?token=$INSTALL_TOKEN")
+# 방법 A: Gist에서 config 로드
+if [ -n "$GIST_ID" ] && [ -z "$API_KEY" ]; then
+    info "GitHub Gist에서 설정 불러오는 중 ($GIST_ID)..."
+    CONFIG_JSON=$(load_from_gist "$GIST_ID")
     if [ -z "$CONFIG_JSON" ]; then
-        error "초대 토큰이 유효하지 않거나 Gateway 접근 불가 ($GATEWAY_URL)"
+        error "Gist 접근 실패 — 비공개 Gist면 'gh auth login' 또는 GH_TOKEN 필요"
     fi
 
-    # Python으로 JSON 파싱 후 환경 변수에 주입
+    eval "$(python3 - "$CONFIG_JSON" <<'PYEOF'
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception as e:
+    sys.exit(f"JSON 파싱 실패: {e}")
+mapping = {
+    "gateway_url": "QUETTA_CFG_GATEWAY_URL",
+    "api_key": "QUETTA_CFG_API_KEY",
+    "rag_url": "QUETTA_CFG_RAG_URL",
+    "tusd_url": "QUETTA_CFG_TUSD_URL",
+    "tusd_token": "QUETTA_CFG_TUSD_TOKEN",
+    "rag_key": "QUETTA_CFG_RAG_KEY",
+    "orchestrator_url": "QUETTA_CFG_ORCHESTRATOR_URL",
+    "timeout": "QUETTA_CFG_TIMEOUT",
+}
+for k, var in mapping.items():
+    v = d.get(k, "")
+    print(f'{var}={json.dumps(v)}')
+PYEOF
+)"
+    [ -n "$QUETTA_CFG_GATEWAY_URL" ] && GATEWAY_URL="$QUETTA_CFG_GATEWAY_URL"
+    API_KEY="$QUETTA_CFG_API_KEY"
+    RAG_URL="$QUETTA_CFG_RAG_URL"
+    TUSD_URL="$QUETTA_CFG_TUSD_URL"
+    TUSD_TOKEN="$QUETTA_CFG_TUSD_TOKEN"
+    RAG_KEY="$QUETTA_CFG_RAG_KEY"
+    ORCH_URL="$QUETTA_CFG_ORCHESTRATOR_URL"
+    [ -n "$QUETTA_CFG_TIMEOUT" ] && TIMEOUT="$QUETTA_CFG_TIMEOUT"
+    success "Gist 설정 로드 완료"
+fi
+
+# 방법 B: Gateway 초대 토큰
+if [ -n "$INSTALL_TOKEN" ] && [ -z "$API_KEY" ]; then
+    info "초대 토큰 검증 중..."
+    [ -z "$GATEWAY_URL" ] && GATEWAY_URL="https://rag.quetta-soft.com"
+    CONFIG_JSON=$(curl -sf "$GATEWAY_URL/install/config?token=$INSTALL_TOKEN")
+    if [ -z "$CONFIG_JSON" ]; then
+        error "초대 토큰 유효하지 않거나 Gateway 접근 불가"
+    fi
     eval "$(python3 - "$CONFIG_JSON" <<'PYEOF'
 import json, sys
 d = json.loads(sys.argv[1])
 for k, v in d.items():
-    # 쉘 변수로 출력 (quoted)
     print(f'QUETTA_CFG_{k.upper()}={json.dumps(v)}')
 PYEOF
 )"
@@ -99,17 +169,18 @@ PYEOF
     RAG_KEY="$QUETTA_CFG_RAG_KEY"
     ORCH_URL="$QUETTA_CFG_ORCHESTRATOR_URL"
     [ -n "$QUETTA_CFG_GATEWAY_URL" ] && GATEWAY_URL="$QUETTA_CFG_GATEWAY_URL"
-    success "초대 토큰 검증 완료 — config 수신"
+    success "초대 토큰 검증 완료"
 fi
 
-# API_KEY가 여전히 비어있으면 에러 (로컬 개발 시에는 허용)
+# 필수값 체크
+[ -z "$GATEWAY_URL" ] && GATEWAY_URL="https://rag.quetta-soft.com"
 if [ -z "$API_KEY" ] && [[ "$GATEWAY_URL" =~ ^https:// ]]; then
-    error "QUETTA_INSTALL_TOKEN 또는 QUETTA_API_KEY 중 하나는 필수입니다."
+    error "설정 필요: QUETTA_GIST_ID / QUETTA_INSTALL_TOKEN / QUETTA_API_KEY 중 하나"
 fi
 
-# 빈 값 채우기 (로컬 개발 기본값)
-[ -z "$RAG_URL" ]  && RAG_URL="${GATEWAY_URL:-http://localhost:8400}"
-[ -z "$TUSD_URL" ] && TUSD_URL="${GATEWAY_URL:-http://localhost:1080}"
+# 빈 값 기본값
+[ -z "$RAG_URL" ]  && RAG_URL="$GATEWAY_URL"
+[ -z "$TUSD_URL" ] && TUSD_URL="$GATEWAY_URL"
 [ -z "$RAG_KEY" ]  && RAG_KEY="rag-claude-key-2026"
 [ -z "$ORCH_URL" ] && ORCH_URL="${GATEWAY_URL%/}/orchestrator"
 

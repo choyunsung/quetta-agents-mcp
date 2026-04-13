@@ -1,10 +1,65 @@
-# 12. 초대 토큰 설치 시스템
+# 12. 비공개 설치 시스템 (2가지 방식)
 
-Quetta MCP는 아무나 설치할 수 없습니다. **관리자가 발급한 초대 토큰**을 가진 사용자만 설치 가능합니다.
+Quetta MCP는 아무나 설치할 수 없습니다. 설치 권한을 배포하는 2가지 방식을 지원합니다.
 
-## 사용자 흐름 (설치)
+## 방식 A: GitHub Secret Gist (권장)
 
-관리자에게 초대 토큰을 받은 뒤:
+관리자가 GitHub에 **secret Gist**로 설정값을 올리고, Gist ID를 팀원에게 전달.
+
+### 팀원 설치
+
+```bash
+# 방법 1: gh CLI 인증 사용 (자동)
+gh auth login  # 한 번만
+QUETTA_GIST_ID="de6ac976511b92dd39115a0ac39626ff" \
+bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+
+# 방법 2: GitHub PAT 사용
+GH_TOKEN=ghp_xxx QUETTA_GIST_ID="de6ac976..." \
+bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+```
+
+### 관리자가 Gist 생성
+
+```bash
+# 1. config.json 준비
+cat > quetta-install-config.json <<EOF
+{
+  "gateway_url": "https://rag.quetta-soft.com",
+  "orchestrator_url": "https://rag.quetta-soft.com/orchestrator",
+  "api_key": "YOUR_API_KEY",
+  "rag_url": "https://rag.quetta-soft.com",
+  "tusd_url": "https://rag.quetta-soft.com",
+  "tusd_token": "YOUR_TUSD_TOKEN",
+  "rag_key": "rag-claude-key-2026",
+  "timeout": "300"
+}
+EOF
+
+# 2. Secret Gist 생성 (secret = default)
+gh gist create quetta-install-config.json -d "Quetta MCP install config"
+# → https://gist.github.com/USER/<GIST_ID>
+
+# 3. 팀원에게 Gist ID 전달
+# 팀원은 gh CLI로 해당 Gist 읽기 권한이 있어야 함 (비공개 Gist는 소유자 + 공유받은 사람만)
+```
+
+### 장점
+- 관리가 GitHub UI에서 이루어짐 — 편집, 취소, 권한 관리
+- 팀원 인증이 GitHub 계정으로 통합됨
+- 설정 파일 버전 관리 (Gist revisions)
+
+### 주의
+- "Secret Gist"는 **URL을 아는 누구나 접근 가능**. 진짜 비공개는 Gist를 만든 계정만 접근 가능한 건 아님 — URL 추측 불가.
+- 완전 비공개가 필요하면 private GitHub repo + team 권한 사용
+
+---
+
+## 방식 B: Gateway 초대 토큰 (GitHub 불필요)
+
+관리자가 Gateway에서 직접 토큰 발급 → 팀원에게 전달.
+
+### 팀원 설치
 
 ```bash
 QUETTA_INSTALL_TOKEN="<받은_토큰>" \
