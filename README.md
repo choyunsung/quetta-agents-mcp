@@ -29,22 +29,26 @@
 
 ## 설치
 
-### 원클릭 설치 (권장, Mac/Linux 모두 지원)
+### 원클릭 설치 (Mac / Linux) — 완전 자동
 
 ```bash
+# 비대화형 (추천, 아무 입력도 필요 없음):
+QUETTA_NONINTERACTIVE=1 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+
+# 대화형 (기본값으로 엔터만 눌러도 OK):
 curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh | bash
 ```
 
-설치 스크립트가 자동으로:
+**설치 스크립트가 자동으로:**
 1. `uv` 미설치 시 자동 설치 (Mac Homebrew 경로 포함)
-2. GitHub HTTPS 우선으로 패키지 다운로드 (SSH 키 불필요), 실패 시 SSH로 폴백
-3. `claude mcp add-json` CLI로 등록 (user scope) — `claude mcp list`에 즉시 표시
-4. `claude` CLI 없을 때만 `~/.claude/settings.json` 직접 편집
+2. GitHub HTTPS 우선 다운로드 (SSH 키 불필요)
+3. `claude mcp add-json` CLI로 등록 (user scope)
+4. **`QUETTA_GATEWAY_URL`, `QUETTA_API_KEY`, `QUETTA_RAG_URL`, `QUETTA_TUSD_URL`, `QUETTA_TUSD_TOKEN` 자동 주입** (공유 기본값)
+5. `~/.claude/CLAUDE.md` 에 세션 시작 시 공유 메모리 자동 로드 지시 추가
 
-환경변수로 미리 지정 가능:
+**개인 키로 오버라이드 하려면:**
 ```bash
-QUETTA_GATEWAY_URL=https://rag.quetta-soft.com \
-QUETTA_API_KEY=your_api_key \
+QUETTA_API_KEY=your_personal_key \
 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
 ```
 

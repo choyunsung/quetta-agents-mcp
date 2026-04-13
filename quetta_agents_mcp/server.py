@@ -1370,6 +1370,24 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="quetta_session_init",
+            description=(
+                "**세션 시작 컨텍스트 로드** — 공유 RAG에서 사용자 프로필/활성 프로젝트/최근 기억을\n"
+                "압축된 형태로 반환합니다. Claude Code 세션 시작 시 **자동 호출**되어 멀티 계정 간\n"
+                "대화를 매끄럽게 이어갑니다.\n\n"
+                "반환:\n"
+                "  - 사용자 메모리 (고정 사실)\n"
+                "  - 최근 활성 프로젝트 (대화 로그에서 추출)\n"
+                "  - 인제스트된 주요 문서 요약 (논문·설계도·데이터)"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "max_items": {"type": "integer", "default": 10},
+                },
+            },
+        ),
+        Tool(
             name="quetta_memory_save",
             description=(
                 "**공유 메모리에 기억 저장** — 멀티 계정/세션에서 공유되는 영구 기억을 RAG에 저장합니다.\n"
@@ -2388,6 +2406,89 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         ))]
 
     # ── 공유 메모리 (멀티 계정 간 동기화) ──────────────────────────────────────
+    elif name == "quetta_session_init":
+        max_items = arguments.get("max_items", 10)
+        sections: list[str] = []
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            # 1) 사용자 메모리 (source=user-memory)
+            try:
+                r = await client.post(
+                    f"{RAG_URL}/search", headers=_rag_headers(),
+                    json={"query": "user profile preferences context",
+                          "limit": 30, "mode": "hybrid"},
+                )
+                if r.status_code == 200:
+                    body = r.json()
+                    hits = body if isinstance(body, list) else body.get("sources") or body.get("results") or []
+                    user_mem = [h for h in hits if h.get("source", "") == "user-memory"][:max_items]
+                    if user_mem:
+                        sections.append("### 👤 사용자 메모리")
+                        for h in user_mem:
+                            txt = (h.get("text") or "")[:300]
+                            tags = (h.get("metadata", {}) or {}).get("tags", [])
+                            tag_s = f"  _[{', '.join(tags)}]_" if tags else ""
+                            sections.append(f"- {txt}{tag_s}")
+            except Exception as e:
+                sections.append(f"_(사용자 메모리 로드 실패: {e})_")
+
+            # 2) 최근 저장된 Q&A (대화 이력)
+            try:
+                r = await client.post(
+                    f"{RAG_URL}/search", headers=_rag_headers(),
+                    json={"query": "최근 작업 recent project current task",
+                          "limit": 10, "mode": "hybrid"},
+                )
+                if r.status_code == 200:
+                    body = r.json()
+                    hits = body if isinstance(body, list) else body.get("sources") or body.get("results") or []
+                    qa_mem = [h for h in hits if h.get("source", "") == "quetta-gateway"][:5]
+                    if qa_mem:
+                        sections.append("\n### 💬 최근 대화 맥락")
+                        for h in qa_mem:
+                            txt = (h.get("text") or "")[:250]
+                            sections.append(f"- {txt}")
+            except Exception:
+                pass
+
+            # 3) 인제스트된 주요 문서 (type=paper/blueprint)
+            try:
+                r = await client.post(
+                    f"{RAG_URL}/search", headers=_rag_headers(),
+                    json={"query": "paper blueprint document 논문 설계도",
+                          "limit": 30, "mode": "hybrid"},
+                )
+                if r.status_code == 200:
+                    body = r.json()
+                    hits = body if isinstance(body, list) else body.get("sources") or body.get("results") or []
+                    docs = {}
+                    for h in hits:
+                        meta = h.get("metadata", {}) or {}
+                        t = meta.get("type")
+                        fn = meta.get("filename")
+                        if t in ("paper", "blueprint") and fn and fn not in docs:
+                            docs[fn] = t
+                        if len(docs) >= max_items: break
+                    if docs:
+                        sections.append("\n### 📚 활성 문서")
+                        for fn, t in docs.items():
+                            sections.append(f"- [{t}] {fn}")
+            except Exception:
+                pass
+
+        if not sections:
+            return [TextContent(type="text", text=(
+                "## 🎯 Quetta 세션 초기화\n\n"
+                "_저장된 공유 메모리 없음._ `quetta_memory_save`로 사용자 메모리를 저장하면 "
+                "다음 세션부터 자동 로드됩니다."
+            ))]
+
+        return [TextContent(type="text", text=(
+            "## 🎯 Quetta 세션 초기화 (공유 메모리 로드)\n\n"
+            + "\n".join(sections)
+            + "\n\n_이 컨텍스트는 모든 Claude Code 계정에서 동일하게 공유됩니다._"
+        ))]
+
     elif name == "quetta_memory_save":
         text = arguments["text"].strip()
         tags = arguments.get("tags", [])
