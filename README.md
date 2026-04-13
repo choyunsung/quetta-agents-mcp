@@ -505,7 +505,15 @@ python3 scripts/build-docs-pdf.py
 
 ## 변경 이력
 
-### v0.12.0 (최신)
+### v0.13.0 (최신)
+- **대화 히스토리 자동 저장 (MongoDB)** — 모든 `quetta_ask`/`quetta_auto` 대화가 NoSQL에 기록
+- 계정별(API key hash) 누적 + 통합 조회 지원
+- 신규 도구: `quetta_history_list` / `quetta_history_get` / `quetta_history_stats`
+- **초대 토큰 기반 설치** — 관리자가 토큰 발급, 팀원이 토큰으로 설치
+- 신규 Gateway 엔드포인트: `/install/config`, `/install/invite`, `/install/invites`
+- 관리자 스크립트: `scripts/invite.sh` (create/list/revoke)
+
+### v0.12.0
 - **공유 메모리 시스템** — 멀티 Claude Code 계정 간 기억 동기화
 - `quetta_memory_save` / `quetta_memory_recall` / `quetta_memory_list` 추가
 - `quetta_auto` 에 memory_save / memory_recall / memory_list 의도 (최상위)

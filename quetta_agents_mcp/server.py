@@ -52,7 +52,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.12.0"
+VERSION          = "0.13.0"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -1370,6 +1370,41 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="quetta_history_list",
+            description=(
+                "**대화 히스토리 세션 목록** — MongoDB에 저장된 최근 대화 세션 조회.\n\n"
+                "파라미터:\n"
+                "  - `mine_only` (기본 true): 내 API 키로 생성된 세션만\n"
+                "  - `unified` (기본 false): true면 모든 사용자의 세션 통합 조회\n"
+                "  - `limit`: 최대 반환 개수 (기본 30)"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "mine_only": {"type": "boolean", "default": True},
+                    "unified":   {"type": "boolean", "default": False},
+                    "limit":     {"type": "integer", "default": 30},
+                },
+            },
+        ),
+        Tool(
+            name="quetta_history_get",
+            description="특정 세션의 전체 대화 이력을 시간순으로 조회.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "limit":      {"type": "integer", "default": 100},
+                },
+                "required": ["session_id"],
+            },
+        ),
+        Tool(
+            name="quetta_history_stats",
+            description="저장된 전체 대화 히스토리 통계 (대화 수, 사용자 수, 백엔드별 분포 등).",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
             name="quetta_session_init",
             description=(
                 "**세션 시작 컨텍스트 로드** — 공유 RAG에서 사용자 프로필/활성 프로젝트/최근 기억을\n"
@@ -2404,6 +2439,88 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             f"**필터:** {filename or '전체 논문'}  |  참조: {len(hits)}개 청크\n\n"
             f"---\n\n{answer}"
         ))]
+
+    # ── 대화 히스토리 (MongoDB) ────────────────────────────────────────────────
+    elif name == "quetta_history_list":
+        mine_only = arguments.get("mine_only", True)
+        unified = arguments.get("unified", False)
+        limit = arguments.get("limit", 30)
+
+        params: dict = {"limit": limit}
+        # mine_only이고 unified 아니면 내 키 hash 필터
+        if mine_only and not unified and GATEWAY_API_KEY:
+            import hashlib
+            params["user_hash"] = hashlib.sha256(GATEWAY_API_KEY.encode()).hexdigest()[:16]
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{GATEWAY_URL}/history/sessions",
+                params=params,
+                headers=_auth_headers(),
+            )
+        if resp.status_code != 200:
+            return [TextContent(type="text", text=f"히스토리 조회 실패: {resp.status_code}")]
+
+        sessions = resp.json()
+        if not sessions:
+            scope = "전체" if unified else "내 계정"
+            return [TextContent(type="text", text=f"{scope} 저장된 세션 없음.")]
+
+        import datetime
+        scope = "전체 사용자 통합" if unified else "내 계정"
+        lines = [f"## 💬 대화 히스토리 ({scope}, {len(sessions)}개 세션)\n"]
+        for s in sessions:
+            first = datetime.datetime.fromtimestamp(s["first_ts"]).strftime("%m-%d %H:%M")
+            last  = datetime.datetime.fromtimestamp(s["last_ts"]).strftime("%m-%d %H:%M")
+            preview = s.get("preview", "")[:100]
+            lines.append(f"- `{s['session_id']}`  ({s['count']}개 메시지, {first}~{last})")
+            if preview: lines.append(f"  _\"{preview}...\"_")
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "quetta_history_get":
+        sid = arguments["session_id"]
+        limit = arguments.get("limit", 100)
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{GATEWAY_URL}/history/session/{sid}",
+                params={"limit": limit},
+                headers=_auth_headers(),
+            )
+        if resp.status_code != 200:
+            return [TextContent(type="text", text=f"세션 조회 실패 {resp.status_code}: {resp.text[:200]}")]
+        docs = resp.json()
+        if not docs:
+            return [TextContent(type="text", text=f"세션 `{sid}` 기록 없음.")]
+        import datetime
+        lines = [f"## 🗂 세션 `{sid}` ({len(docs)}개 메시지)\n"]
+        for d in docs:
+            ts = datetime.datetime.fromtimestamp(d["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
+            backend = d.get("backend", "?")
+            q = d.get("query", "")[:300]
+            a = d.get("response", "")[:400]
+            lines.append(f"### {ts}  [{backend}]")
+            lines.append(f"**Q:** {q}")
+            lines.append(f"**A:** {a}")
+            lines.append("")
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "quetta_history_stats":
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(f"{GATEWAY_URL}/history/stats", headers=_auth_headers())
+        if resp.status_code != 200:
+            return [TextContent(type="text", text=f"통계 조회 실패 {resp.status_code}")]
+        d = resp.json()
+        lines = [
+            "## 📊 대화 히스토리 통계",
+            f"- 총 대화 수: **{d.get('total_conversations', 0):,}**",
+            f"- 고유 세션 수: **{d.get('unique_sessions', 0):,}**",
+            f"- 고유 사용자 수: **{d.get('unique_users', 0):,}**",
+            "",
+            "### 백엔드별 분포",
+        ]
+        for bk, cnt in (d.get("by_backend") or {}).items():
+            lines.append(f"- {bk}: {cnt:,}")
+        return [TextContent(type="text", text="\n".join(lines))]
 
     # ── 공유 메모리 (멀티 계정 간 동기화) ──────────────────────────────────────
     elif name == "quetta_session_init":

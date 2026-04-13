@@ -24,6 +24,9 @@ ORDER = [
     "08-tools-reference.md",
     "09-configuration.md",
     "10-operations.md",
+    "11-shared-memory.md",
+    "12-install-token.md",
+    "13-conversation-history.md",
 ]
 
 try:

@@ -9,30 +9,16 @@ set -e
 REPO_HTTPS="git+https://github.com/choyunsung/quetta-agents-mcp"
 REPO_SSH="git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 GATEWAY_URL="${QUETTA_GATEWAY_URL:-https://rag.quetta-soft.com}"
-# 공유 기본 API 키 (개인/팀 사용) — 사용자 전용 키가 있으면 QUETTA_API_KEY로 오버라이드
-DEFAULT_QUETTA_API_KEY="21f5f4776705d3c1ac5823b6db7a6e95cfa66d93d2be525a"
-API_KEY="${QUETTA_API_KEY:-$DEFAULT_QUETTA_API_KEY}"
-TIMEOUT="${QUETTA_TIMEOUT:-300}"
+INSTALL_TOKEN="${QUETTA_INSTALL_TOKEN:-}"
+# 직접 키를 알고 있으면 아래도 override 가능 (일반적으로는 INSTALL_TOKEN으로 자동 조회)
+API_KEY="${QUETTA_API_KEY:-}"
 RAG_URL="${QUETTA_RAG_URL:-}"
 TUSD_URL="${QUETTA_TUSD_URL:-}"
 TUSD_TOKEN="${QUETTA_TUSD_TOKEN:-}"
-RAG_KEY="${QUETTA_RAG_KEY:-rag-claude-key-2026}"
+RAG_KEY="${QUETTA_RAG_KEY:-}"
+ORCH_URL="${QUETTA_ORCHESTRATOR_URL:-}"
+TIMEOUT="${QUETTA_TIMEOUT:-300}"
 SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
-
-# GATEWAY_URL이 공개 URL(https)이고 파일 업로드 관련 변수가 비어있으면 자동 유도
-# (nginx가 /upload/ 와 /files/ 를 동일 도메인에서 프록시)
-if [[ "$GATEWAY_URL" =~ ^https:// ]]; then
-    [ -z "$RAG_URL" ]    && RAG_URL="$GATEWAY_URL"
-    [ -z "$TUSD_URL" ]   && TUSD_URL="$GATEWAY_URL"
-    # 기본 공개 TUSD 토큰 (rag.quetta-soft.com 전용) — 내부 서버에서는 외부 공용 토큰 사용
-    if [ -z "$TUSD_TOKEN" ] && [[ "$GATEWAY_URL" == *"rag.quetta-soft.com"* ]]; then
-        TUSD_TOKEN="70e1183fe64e1b6efd7ab0966cec24bad1419f17f7b6fe92e6daa685f4cbdf68"
-    fi
-else
-    # 로컬 게이트웨이 시나리오 → 로컬 기본값
-    [ -z "$RAG_URL" ]  && RAG_URL="http://localhost:8400"
-    [ -z "$TUSD_URL" ] && TUSD_URL="http://localhost:1080"
-fi
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()    { echo -e "${CYAN}▶ $*${NC}"; }
@@ -76,23 +62,56 @@ else
     error "Cannot install from GitHub. Check network or GitHub access."
 fi
 
-# ── 3. Prompt for config if not set and stdin is a TTY ────────────────────────
-# 환경변수/기본값으로 API_KEY가 이미 설정된 경우 프롬프트 생략 → 완전 자동 설치
-if [ "$API_KEY" = "$DEFAULT_QUETTA_API_KEY" ] && [ -t 0 ] && [ "${QUETTA_NONINTERACTIVE:-0}" != "1" ]; then
-    echo ""
-    info "기본값 사용: Gateway=${GATEWAY_URL}"
-    info "개인 API 키가 있으면 지금 입력하거나 엔터로 공유 키 사용"
-    printf "${YELLOW}Gateway URL [${GATEWAY_URL}]: ${NC}"
-    read -r input_url
-    [ -n "$input_url" ] && GATEWAY_URL="$input_url"
+# ── 3. 초대 토큰 입력 / config 조회 ───────────────────────────────────────────
+# 우선순위:
+#  1. QUETTA_API_KEY 환경변수가 있으면 그걸 그대로 사용 (직접 설정)
+#  2. QUETTA_INSTALL_TOKEN이 있으면 Gateway /install/config 로 설정 조회
+#  3. 둘 다 없고 TTY면 초대 토큰 입력 프롬프트
 
-    printf "${YELLOW}API Key (엔터=공유 키 사용): ${NC}"
-    read -rs input_key
+if [ -z "$API_KEY" ] && [ -z "$INSTALL_TOKEN" ] && [ -t 0 ] && [ "${QUETTA_NONINTERACTIVE:-0}" != "1" ]; then
     echo ""
-    [ -n "$input_key" ] && API_KEY="$input_key"
+    info "이 MCP는 **초대 토큰**을 받은 사용자만 설치할 수 있습니다."
+    info "관리자에게 토큰을 요청하거나 직접 QUETTA_API_KEY를 지정하세요."
+    printf "${YELLOW}초대 토큰 (QUETTA_INSTALL_TOKEN): ${NC}"
+    read -r INSTALL_TOKEN
 fi
 
-ORCH_URL="${GATEWAY_URL%/}/orchestrator"
+if [ -n "$INSTALL_TOKEN" ] && [ -z "$API_KEY" ]; then
+    info "초대 토큰 검증 중..."
+    CONFIG_JSON=$(curl -sf "$GATEWAY_URL/install/config?token=$INSTALL_TOKEN")
+    if [ -z "$CONFIG_JSON" ]; then
+        error "초대 토큰이 유효하지 않거나 Gateway 접근 불가 ($GATEWAY_URL)"
+    fi
+
+    # Python으로 JSON 파싱 후 환경 변수에 주입
+    eval "$(python3 - "$CONFIG_JSON" <<'PYEOF'
+import json, sys
+d = json.loads(sys.argv[1])
+for k, v in d.items():
+    # 쉘 변수로 출력 (quoted)
+    print(f'QUETTA_CFG_{k.upper()}={json.dumps(v)}')
+PYEOF
+)"
+    API_KEY="$QUETTA_CFG_API_KEY"
+    RAG_URL="$QUETTA_CFG_RAG_URL"
+    TUSD_URL="$QUETTA_CFG_TUSD_URL"
+    TUSD_TOKEN="$QUETTA_CFG_TUSD_TOKEN"
+    RAG_KEY="$QUETTA_CFG_RAG_KEY"
+    ORCH_URL="$QUETTA_CFG_ORCHESTRATOR_URL"
+    [ -n "$QUETTA_CFG_GATEWAY_URL" ] && GATEWAY_URL="$QUETTA_CFG_GATEWAY_URL"
+    success "초대 토큰 검증 완료 — config 수신"
+fi
+
+# API_KEY가 여전히 비어있으면 에러 (로컬 개발 시에는 허용)
+if [ -z "$API_KEY" ] && [[ "$GATEWAY_URL" =~ ^https:// ]]; then
+    error "QUETTA_INSTALL_TOKEN 또는 QUETTA_API_KEY 중 하나는 필수입니다."
+fi
+
+# 빈 값 채우기 (로컬 개발 기본값)
+[ -z "$RAG_URL" ]  && RAG_URL="${GATEWAY_URL:-http://localhost:8400}"
+[ -z "$TUSD_URL" ] && TUSD_URL="${GATEWAY_URL:-http://localhost:1080}"
+[ -z "$RAG_KEY" ]  && RAG_KEY="rag-claude-key-2026"
+[ -z "$ORCH_URL" ] && ORCH_URL="${GATEWAY_URL%/}/orchestrator"
 
 # ── 4. Register with Claude Code ─────────────────────────────────────────────
 # Prefer `claude mcp add-json` (official CLI method — works for both Mac and Linux)

@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>Quetta Agents MCP v0.12.0</title>
+<title>Quetta Agents MCP v0.13.0</title>
 <style>
 @page {
   size: A4;
@@ -88,12 +88,12 @@ hr { border: none; border-top: 1px solid #ccc; margin: 1.5em 0; }
       <div class="subtitle">사용자 매뉴얼 &amp; 기술 개요</div>
       <p>Smart LLM Gateway + 원격 PC 제어 + 문서·설계도 분석 + RAG 지식베이스</p>
       <div class="meta">
-        Version 0.12.0<br>
+        Version 0.13.0<br>
         Documentation Build<br>
         <span style="font-size:9pt;">https://github.com/choyunsung/quetta-agents-mcp</span>
       </div>
     </div>
-    <section class="toc"><h1>목차</h1><ul><li><a href="#doc-README">Quetta Agents MCP — 상세 문서</a></li><li><a href="#doc-01">01. 아키텍처 개요</a></li><li><a href="#doc-02">02. LLM 라우팅</a></li><li><a href="#doc-03">03. 스마트 디스패처 (`quetta_auto`)</a></li><li><a href="#doc-04">04. 원격 에이전트 (Remote Agent)</a></li><li><a href="#doc-05">05. 논문 분석 (Nougat + Gemini + Claude + RAG)</a></li><li><a href="#doc-06">06. 설계도 분석 (기계 / 전기 / CPLD)</a></li><li><a href="#doc-07">07. 파일 업로드 & RAG 통합</a></li><li><a href="#doc-08">08. 도구 레퍼런스</a></li><li><a href="#doc-09">09. 설치 & 설정</a></li><li><a href="#doc-10">10. 트러블슈팅</a></li></ul></section><section id="doc-README">
+    <section class="toc"><h1>목차</h1><ul><li><a href="#doc-README">Quetta Agents MCP — 상세 문서</a></li><li><a href="#doc-01">01. 아키텍처 개요</a></li><li><a href="#doc-02">02. LLM 라우팅</a></li><li><a href="#doc-03">03. 스마트 디스패처 (`quetta_auto`)</a></li><li><a href="#doc-04">04. 원격 에이전트 (Remote Agent)</a></li><li><a href="#doc-05">05. 논문 분석 (Nougat + Gemini + Claude + RAG)</a></li><li><a href="#doc-06">06. 설계도 분석 (기계 / 전기 / CPLD)</a></li><li><a href="#doc-07">07. 파일 업로드 & RAG 통합</a></li><li><a href="#doc-08">08. 도구 레퍼런스</a></li><li><a href="#doc-09">09. 설치 & 설정</a></li><li><a href="#doc-10">10. 트러블슈팅</a></li><li><a href="#doc-11">11. 공유 메모리 & 멀티 계정</a></li><li><a href="#doc-12">12. 초대 토큰 설치 시스템</a></li><li><a href="#doc-13">13. 대화 히스토리 (NoSQL)</a></li></ul></section><section id="doc-README">
 <h1 id="quetta-agents-mcp">Quetta Agents MCP — 상세 문서</h1>
 <p>Quetta Agents MCP는 <strong>LLM 스마트 라우팅 + 원격 PC(GPU) 제어 + 문서/도면 분석 + RAG 지식베이스</strong>를 하나의 MCP로 통합한 시스템입니다.</p>
 <h2 id="_1">📚 문서 목차</h2>
@@ -108,6 +108,9 @@ hr { border: none; border-top: 1px solid #ccc; margin: 1.5em 0; }
 <li><a href="#doc-08">도구 레퍼런스</a> — 전체 도구 상세 파라미터</li>
 <li><a href="#doc-09">환경변수 &amp; 설정</a> — env 변수, 설치, 업데이트</li>
 <li><a href="#doc-10">운영 가이드</a> — 로그, 트러블슈팅, 모니터링</li>
+<li><a href="#doc-11">공유 메모리 &amp; 멀티 계정</a> — RAG 지식베이스 공유, 세션 자동 초기화</li>
+<li><a href="#doc-12">초대 토큰 설치 시스템</a> — 관리자 토큰 발급, 팀원 배포</li>
+<li><a href="#doc-13">대화 히스토리 (NoSQL)</a> — MongoDB 자동 저장, 계정별/통합 조회</li>
 </ol>
 <hr />
 <h2 id="_2">빠른 시작</h2>
@@ -2520,6 +2523,499 @@ quetta_update      # 최신으로 업데이트
 <p>GitHub Issues로 제보:
 https://github.com/choyunsung/quetta-agents-mcp/issues</p>
 <p>로그 첨부 시 개인정보·민감 정보는 마스킹해주세요.</p>
+</section>
+<section id="doc-11">
+<h1 id="11">11. 공유 메모리 &amp; 멀티 계정</h1>
+<p>Quetta MCP는 여러 Claude Code 계정이 <strong>동일한 서버의 RAG 지식베이스</strong>를 공유해 기억을 이어가도록 설계되어 있습니다.</p>
+<h2 id="_1">핵심 개념</h2>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>[계정 A]  ─┐
+[계정 B]  ─┼──▶ [공유 Quetta Server] ──▶ [공유 RAG 지식베이스]
+[계정 C]  ─┘
+</code></pre></div>
+
+<ul>
+<li>같은 <code>QUETTA_GATEWAY_URL</code> + (개인 혹은 공유) API 키를 사용하면 모든 계정이 같은 지식베이스에 접근</li>
+<li>한 계정에서 저장한 기억은 다른 계정에서 즉시 검색·인용 가능</li>
+<li>새 세션 시작 시 자동으로 기억이 컨텍스트에 주입됨</li>
+</ul>
+<h2 id="3">3가지 기억 레이어</h2>
+<h3 id="1-qa">1. 자동 Q&amp;A 저장</h3>
+<ul>
+<li><code>quetta_ask</code>/<code>quetta_auto</code> 호출 시 Q&amp;A가 자동으로 RAG에 저장됨</li>
+<li>사용자가 별도 조치할 필요 없음</li>
+<li>source 태그: <code>quetta-gateway</code></li>
+</ul>
+<h3 id="2">2. 자동 컨텍스트 주입</h3>
+<ul>
+<li>질문할 때마다 Gateway의 RAG harness가 관련 기억을 자동 검색해 LLM 입력에 삽입</li>
+<li>score ≥ 0.35 인 top 4개 청크를 system 메시지로 주입</li>
+<li>질문·답변이 쌓일수록 컨텍스트 품질 향상</li>
+</ul>
+<h3 id="3_1">3. 명시적 사용자 메모리</h3>
+<table>
+<thead>
+<tr>
+<th>도구</th>
+<th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>quetta_memory_save(text, tags?)</code></td>
+<td>고정 사실·선호·결정사항 영구 저장</td>
+</tr>
+<tr>
+<td><code>quetta_memory_recall(query)</code></td>
+<td>의미 검색 (LLM 답변 없이)</td>
+</tr>
+<tr>
+<td><code>quetta_memory_list()</code></td>
+<td>내가 저장한 메모리 목록</td>
+</tr>
+<tr>
+<td><code>quetta_session_init()</code></td>
+<td>세션 시작 시 컨텍스트 프리앰블 생성</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_2">세션 자동 초기화</h2>
+<p>install.sh 가 <code>~/.claude/CLAUDE.md</code> 에 다음 지시를 <strong>자동으로</strong> 추가합니다:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>&lt;!-- quetta-agents-mcp:auto-init BEGIN --&gt;
+<span style="color: #800080; font-weight: bold">## Quetta Agents MCP — 공유 메모리 자동 초기화</span>
+
+새 Claude Code 세션 시작 직후에 아래 도구를 한 번 호출하세요:
+    quetta_session_init()
+
+반환된 사용자 메모리 / 최근 맥락 / 활성 문서를 현재 대화의 배경 지식으로 반영합니다.
+<span style="color: #008000; font-weight: bold">-</span><span style="color: #bbbbbb"> </span>중요한 신규 정보는 quetta_memory_save(text=...) 로 공유 메모리에 저장하세요.
+<span style="color: #008000; font-weight: bold">-</span><span style="color: #bbbbbb"> </span>모든 quetta_ask / quetta_auto 호출은 Gateway RAG harness가 관련 메모리를 자동 주입합니다.
+&lt;!-- quetta-agents-mcp:auto-init END --&gt;
+</code></pre></div>
+
+<p>→ Claude Code가 세션 시작 시 이 지시를 읽고 자동으로 공유 메모리 로드.</p>
+<h2 id="_3">사용 예시</h2>
+<h3 id="a">계정 A: 기억 저장</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>quetta_memory_save(
+    text<span style="color: #666666">=</span><span style="color: #BA2121">&quot;사용자는 MCG 연구자. KRISS 96채널 SQUID 시스템 사용. Python 3.11 + FastAPI 선호.&quot;</span>,
+    tags<span style="color: #666666">=</span>[<span style="color: #BA2121">&quot;profile&quot;</span>, <span style="color: #BA2121">&quot;mcg&quot;</span>],
+)
+<span style="color: #3D7B7B; font-style: italic"># 또는 자연어로:</span>
+quetta_auto(request<span style="color: #666666">=</span><span style="color: #BA2121">&quot;기억해줘: 이 프로젝트는 Python 3.11 + FastAPI 기반이다&quot;</span>)
+</code></pre></div>
+
+<h3 id="b">계정 B: 자동 복원</h3>
+<p>Claude Code 새 세션 → <code>quetta_session_init()</code> 자동 호출 →</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #800080; font-weight: bold">## 🎯 Quetta 세션 초기화 (공유 메모리 로드)</span>
+
+<span style="color: #800080; font-weight: bold">### 👤 사용자 메모리</span>
+<span style="color: #008000; font-weight: bold">-</span><span style="color: #bbbbbb"> </span>사용자는 MCG 연구자. KRISS 96채널 SQUID 시스템 사용. Python 3.11 + FastAPI 선호. <span style="font-style: italic">_[profile, mcg]_</span>
+
+<span style="color: #800080; font-weight: bold">### 💬 최근 대화 맥락</span>
+<span style="color: #008000; font-weight: bold">-</span><span style="color: #bbbbbb"> </span>Q: ECG ischemia 마커 AUC?  A: clin_score 0.929, ensemble_score 0.832...
+
+<span style="color: #800080; font-weight: bold">### 📚 활성 문서</span>
+<span style="color: #008000; font-weight: bold">-</span><span style="color: #bbbbbb"> </span>[paper] attention.pdf
+<span style="color: #008000; font-weight: bold">-</span><span style="color: #bbbbbb"> </span>[blueprint] cpld_top.pdf
+</code></pre></div>
+
+<p>이제 계정 B에서 별도 설명 없이 이어서 작업 가능.</p>
+<h2 id="quetta_auto">자연어 단축 명령 (quetta_auto)</h2>
+<table>
+<thead>
+<tr>
+<th>요청</th>
+<th>자동 라우팅</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"기억해줘: X"</td>
+<td><code>quetta_memory_save(text="X")</code></td>
+</tr>
+<tr>
+<td>"전에 뭐였지?"</td>
+<td><code>quetta_memory_recall</code></td>
+</tr>
+<tr>
+<td>"내 기억 목록"</td>
+<td><code>quetta_memory_list</code></td>
+</tr>
+<tr>
+<td>"저장된 논문에서 찾아"</td>
+<td><code>quetta_paper_query</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="_4">프라이버시 / 공유 범위</h2>
+<ul>
+<li><strong>같은 API 키 사용 = 같은 지식베이스 공유</strong></li>
+<li>개인 데이터가 팀에 공유되지 않기를 원하면 <strong>개인 API 키</strong> 발급 요청</li>
+<li><code>quetta_memory_save</code> 시 <code>source</code> 파라미터로 네임스페이스 분리 가능</li>
+</ul>
+<h2 id="_5">관련 문서</h2>
+<ul>
+<li><a href="#doc-08">도구 레퍼런스</a></li>
+<li><a href="#doc-09">설치 &amp; 설정</a></li>
+<li><a href="#doc-12">초대 토큰 설치 시스템</a></li>
+</ul>
+</section>
+<section id="doc-12">
+<h1 id="12">12. 초대 토큰 설치 시스템</h1>
+<p>Quetta MCP는 아무나 설치할 수 없습니다. <strong>관리자가 발급한 초대 토큰</strong>을 가진 사용자만 설치 가능합니다.</p>
+<h2 id="_1">사용자 흐름 (설치)</h2>
+<p>관리자에게 초대 토큰을 받은 뒤:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #19177C">QUETTA_INSTALL_TOKEN</span><span style="color: #666666">=</span><span style="color: #BA2121">&quot;&lt;받은_토큰&gt;&quot;</span><span style="color: #bbbbbb"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+bash<span style="color: #bbbbbb"> </span>&lt;<span style="color: #666666">(</span>curl<span style="color: #bbbbbb"> </span>-fsSL<span style="color: #bbbbbb"> </span>https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh<span style="color: #666666">)</span>
+</code></pre></div>
+
+<p><strong>install.sh 동작:</strong>
+1. Gateway <code>GET /install/config?token=&lt;토큰&gt;</code> 호출
+2. 토큰이 유효하면 설정값(API 키, URL 등) 수신
+3. <code>claude mcp add-json</code> 으로 Claude Code에 등록
+4. <code>~/.claude/CLAUDE.md</code> 에 세션 자동 초기화 지시 추가
+5. <strong>끝</strong> — 사용자는 API 키를 직접 볼 필요도, 관리할 필요도 없음</p>
+<p>토큰 미지정 시 대화형 입력 프롬프트가 나옵니다.</p>
+<h2 id="_2">관리자 흐름 (토큰 발급)</h2>
+<h3 id="1">1. 토큰 생성</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #3D7B7B; font-style: italic"># 서버에서 (또는 API_KEY 있는 곳에서)</span>
+/data/quetta-agents/scripts/invite.sh<span style="color: #bbbbbb"> </span>create<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;팀원A&quot;</span>
+</code></pre></div>
+
+<p>출력:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>✅ 초대 토큰 발급 완료 (팀원A, 365일)
+
+┌────────────────────────────────────────────────────────────────────┐
+│ 아래 명령어를 팀원에게 전달하세요:                                   │
+└────────────────────────────────────────────────────────────────────┘
+
+  QUETTA_INSTALL_TOKEN=&quot;KjX9sQ_pLm...&quot; \
+  bash &lt;(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+</code></pre></div>
+
+<p>이 명령어를 Slack / 메일 / DM으로 팀원에게 전달합니다.</p>
+<h3 id="2">2. 유효기간 지정</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #3D7B7B; font-style: italic"># 7일만 유효</span>
+/data/quetta-agents/scripts/invite.sh<span style="color: #bbbbbb"> </span>create<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;임시-테스터&quot;</span><span style="color: #bbbbbb"> </span><span style="color: #666666">7</span>
+
+<span style="color: #3D7B7B; font-style: italic"># 무기한 (0)</span>
+/data/quetta-agents/scripts/invite.sh<span style="color: #bbbbbb"> </span>create<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;영구-사용자&quot;</span><span style="color: #bbbbbb"> </span><span style="color: #666666">0</span>
+</code></pre></div>
+
+<h3 id="3">3. 목록 조회</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>/data/quetta-agents/scripts/invite.sh<span style="color: #bbbbbb"> </span>list
+</code></pre></div>
+
+<p>출력:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>라벨                  prefix          uses   상태   만료
+--------------------------------------------------------------------------------
+팀원A                KjX9sQ_pLm      3     ✓active  2027-04-13
+임시-테스터          9mNxYp0qRt      1     ✓active  2026-04-20
+영구-사용자          Ab3Cd5Ef7g      12    ✓active  ∞
+전직_인턴            Zx2Yw4Vu6t      8     ❌revoked 2026-10-10
+</code></pre></div>
+
+<h3 id="4">4. 토큰 취소</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #3D7B7B; font-style: italic"># prefix 12자로 지정 (충돌 방지)</span>
+/data/quetta-agents/scripts/invite.sh<span style="color: #bbbbbb"> </span>revoke<span style="color: #bbbbbb"> </span>KjX9sQ_pLm
+</code></pre></div>
+
+<p>취소된 토큰은 <strong>즉시 무효화</strong> — 이미 설치된 사용자도 다음 요청부터 실패합니다(설치된 MCP의 실제 API 키가 따로 유효하면 계속 사용 가능, 영구 차단은 master 키 교체).</p>
+<h2 id="rest-api">REST API (직접 호출)</h2>
+<h3 id="admin">토큰 발급 (admin)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>curl<span style="color: #bbbbbb"> </span>-X<span style="color: #bbbbbb"> </span>POST<span style="color: #bbbbbb"> </span>https://rag.quetta-soft.com/install/invite<span style="color: #bbbbbb"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #bbbbbb">  </span>-H<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;Authorization: Bearer &lt;MASTER_API_KEY&gt;&quot;</span><span style="color: #bbbbbb"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #bbbbbb">  </span>-H<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;Content-Type: application/json&quot;</span><span style="color: #bbbbbb"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #bbbbbb">  </span>-d<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&#39;{&quot;label&quot;:&quot;팀원A&quot;,&quot;expires_days&quot;:365}&#39;</span>
+</code></pre></div>
+
+<h3 id="config-public">토큰으로 config 조회 (public — 인증 불필요)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>curl<span style="color: #bbbbbb"> </span>https://rag.quetta-soft.com/install/config?token<span style="color: #666666">=</span>&lt;INVITE_TOKEN&gt;
+</code></pre></div>
+
+<h3 id="admin_1">토큰 목록 (admin)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>curl<span style="color: #bbbbbb"> </span>https://rag.quetta-soft.com/install/invites<span style="color: #bbbbbb"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #bbbbbb">  </span>-H<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;Authorization: Bearer &lt;MASTER_API_KEY&gt;&quot;</span>
+</code></pre></div>
+
+<h3 id="admin_2">토큰 취소 (admin)</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>curl<span style="color: #bbbbbb"> </span>-X<span style="color: #bbbbbb"> </span>DELETE<span style="color: #bbbbbb"> </span>https://rag.quetta-soft.com/install/invite/&lt;PREFIX&gt;<span style="color: #bbbbbb"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #bbbbbb">  </span>-H<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;Authorization: Bearer &lt;MASTER_API_KEY&gt;&quot;</span>
+</code></pre></div>
+
+<h2 id="_3">보안 고려사항</h2>
+<table>
+<thead>
+<tr>
+<th>항목</th>
+<th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>토큰 저장</td>
+<td>Gateway 호스트 <code>/data/quetta-agents/storage/install_tokens.json</code></td>
+</tr>
+<tr>
+<td>토큰 형식</td>
+<td><code>secrets.token_urlsafe(24)</code> — 32자, URL-safe</td>
+</tr>
+<tr>
+<td>토큰 검증</td>
+<td>O(1) lookup (JSON memory + disk persistence)</td>
+</tr>
+<tr>
+<td>만료</td>
+<td>발급 시 지정 (기본 365일)</td>
+</tr>
+<tr>
+<td>사용 기록</td>
+<td><code>uses</code>, <code>last_used</code> 필드에 기록</td>
+</tr>
+<tr>
+<td>Rate limit</td>
+<td>nginx-level 권장 (<code>/install/config</code> 엔드포인트)</td>
+</tr>
+<tr>
+<td>토큰 유출 시</td>
+<td><code>revoke</code> 또는 master API 키 회전</td>
+</tr>
+</tbody>
+</table>
+<h2 id="vs-api">토큰 vs 직접 API 키</h2>
+<table>
+<thead>
+<tr>
+<th>방식</th>
+<th>용도</th>
+<th>장점</th>
+<th>단점</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>초대 토큰</strong></td>
+<td>팀원 배포</td>
+<td>키 노출 없음, 취소 가능, 사용 추적</td>
+<td>Gateway 접근 필요</td>
+</tr>
+<tr>
+<td><strong>직접 API 키</strong> (<code>QUETTA_API_KEY</code>)</td>
+<td>서버-to-서버</td>
+<td>완전 오프라인 사용 가능</td>
+<td>키 관리 필요</td>
+</tr>
+</tbody>
+</table>
+<p>일반 사용자에게는 <strong>초대 토큰</strong>을 권장합니다. 자동화/스크립트에는 직접 API 키.</p>
+<h2 id="_4">관련 문서</h2>
+<ul>
+<li><a href="#doc-09">설치 &amp; 설정</a></li>
+<li><a href="#doc-11">공유 메모리</a></li>
+</ul>
+</section>
+<section id="doc-13">
+<h1 id="13-nosql">13. 대화 히스토리 (NoSQL)</h1>
+<p>모든 <code>quetta_ask</code> / <code>quetta_auto</code> 호출이 자동으로 <strong>MongoDB에 저장</strong>됩니다. 계정별 누적 + 통합 조회 모두 지원.</p>
+<h2 id="_1">아키텍처</h2>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>Claude Code → quetta_ask / quetta_auto
+            ↓
+     Quetta Gateway /v1/chat/completions
+            ├─ RAG harness (context injection)
+            ├─ LLM 응답 생성
+            ├─ save_qa  → RAG vector DB (검색용)
+            └─ save_conversation → MongoDB (이력용) ← NEW
+                                    │
+                                    ▼
+                          quetta_agents.conversations
+                          (계정별 user_hash로 구분)
+</code></pre></div>
+
+<h2 id="_2">저장 데이터 구조</h2>
+<p><code>quetta_agents.conversations</code> 컬렉션:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>{
+<span style="color: #bbbbbb">  </span>_id<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span>ObjectId,
+<span style="color: #bbbbbb">  </span>session_id<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;default&quot;</span>,<span style="color: #bbbbbb">         </span><span style="color: #3D7B7B; font-style: italic">// X-Session-Id 헤더 기반</span>
+<span style="color: #bbbbbb">  </span>timestamp<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #666666">1776062400.123</span>,
+<span style="color: #bbbbbb">  </span>user_hash<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;a3f5b2c1...&quot;</span>,<span style="color: #bbbbbb">      </span><span style="color: #3D7B7B; font-style: italic">// SHA-256(API_KEY)[:16] — 계정 식별</span>
+<span style="color: #bbbbbb">  </span>query<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;사용자 질문&quot;</span>,
+<span style="color: #bbbbbb">  </span>response<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;LLM 답변&quot;</span>,
+<span style="color: #bbbbbb">  </span>backend<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;claude-sonnet&quot;</span>,
+<span style="color: #bbbbbb">  </span>model<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;claude-sonnet-4-6&quot;</span>,
+<span style="color: #bbbbbb">  </span>rag_chunks<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #666666">4</span>,
+<span style="color: #bbbbbb">  </span>tokens<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span>{<span style="color: #bbbbbb"> </span>input<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #666666">150</span>,<span style="color: #bbbbbb"> </span>output<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span><span style="color: #666666">320</span><span style="color: #bbbbbb"> </span>},
+<span style="color: #bbbbbb">  </span>routing<span style="color: #666666">:</span><span style="color: #bbbbbb"> </span>{<span style="color: #bbbbbb"> </span>reason,<span style="color: #bbbbbb"> </span>is_medical,<span style="color: #bbbbbb"> </span>inject_code_skills,<span style="color: #bbbbbb"> </span>multi_agent<span style="color: #bbbbbb"> </span>}
+}
+</code></pre></div>
+
+<p><strong>인덱스:</strong>
+- <code>(session_id, timestamp)</code> — 세션별 시간순
+- <code>(user_hash, timestamp DESC)</code> — 사용자별 최근순
+- <code>(timestamp DESC)</code> — 전체 최근순</p>
+<h2 id="_3">개인정보 보호</h2>
+<ul>
+<li>API 키는 <strong>SHA-256 해시</strong>로만 저장 (역추적 불가)</li>
+<li>같은 API 키 → 같은 <code>user_hash</code> → 동일 사용자로 그룹핑</li>
+<li>다른 키 사용 시 다른 사용자로 분리</li>
+</ul>
+<h2 id="mcp">MCP 도구</h2>
+<h3 id="quetta_history_list"><code>quetta_history_list</code></h3>
+<table>
+<thead>
+<tr>
+<th>파라미터</th>
+<th>기본</th>
+<th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mine_only</code></td>
+<td>true</td>
+<td>내 API 키 세션만</td>
+</tr>
+<tr>
+<td><code>unified</code></td>
+<td>false</td>
+<td>true면 모든 사용자 통합</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>30</td>
+<td>최대 반환 세션 수</td>
+</tr>
+</tbody>
+</table>
+<h3 id="quetta_history_get"><code>quetta_history_get</code></h3>
+<table>
+<thead>
+<tr>
+<th>파라미터</th>
+<th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>session_id</code></td>
+<td>조회할 세션 ID (필수)</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>기본 100</td>
+</tr>
+</tbody>
+</table>
+<h3 id="quetta_history_stats"><code>quetta_history_stats</code></h3>
+<p>파라미터 없음 — 전체 통계 요약.</p>
+<h2 id="_4">사용 예시</h2>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #3D7B7B; font-style: italic"># 내 대화 세션 목록</span>
+quetta_history_list()
+<span style="color: #3D7B7B; font-style: italic"># → ## 💬 대화 히스토리 (내 계정, 12개 세션)</span>
+<span style="color: #3D7B7B; font-style: italic">#    - `default`  (47개 메시지, 04-10 09:22~04-13 08:51)</span>
+<span style="color: #3D7B7B; font-style: italic">#      &quot;ECG ischemia 마커...&quot;</span>
+<span style="color: #3D7B7B; font-style: italic">#    - `project-mcg`  (31개 메시지, ...)</span>
+
+<span style="color: #3D7B7B; font-style: italic"># 전체 사용자 통합 조회</span>
+quetta_history_list(unified<span style="color: #666666">=</span><span style="color: #008000; font-weight: bold">True</span>, limit<span style="color: #666666">=50</span>)
+
+<span style="color: #3D7B7B; font-style: italic"># 특정 세션 상세</span>
+quetta_history_get(session_id<span style="color: #666666">=</span><span style="color: #BA2121">&quot;project-mcg&quot;</span>)
+<span style="color: #3D7B7B; font-style: italic"># → ## 🗂 세션 project-mcg (31개 메시지)</span>
+<span style="color: #3D7B7B; font-style: italic">#    ### 2026-04-12 15:30:00 [claude-sonnet]</span>
+<span style="color: #3D7B7B; font-style: italic">#    Q: ...</span>
+<span style="color: #3D7B7B; font-style: italic">#    A: ...</span>
+
+<span style="color: #3D7B7B; font-style: italic"># 전체 통계</span>
+quetta_history_stats()
+<span style="color: #3D7B7B; font-style: italic"># → 총 대화 수: 1,247</span>
+<span style="color: #3D7B7B; font-style: italic">#    고유 세션 수: 23</span>
+<span style="color: #3D7B7B; font-style: italic">#    고유 사용자 수: 4</span>
+<span style="color: #3D7B7B; font-style: italic">#    백엔드별: claude-sonnet 842 / gemma4 305 / deepseek-r1 100</span>
+</code></pre></div>
+
+<h2 id="id">세션 ID 지정</h2>
+<p>기본 세션 ID는 <code>default</code>입니다. 특정 주제별로 분리하려면 HTTP 요청에 <code>X-Session-Id</code> 헤더 포함:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code><span style="color: #3D7B7B; font-style: italic"># MCP 차원에서 헤더 지정은 아직 미지원 — gateway 직접 호출 시만 가능</span>
+<span style="color: #3D7B7B; font-style: italic"># 향후 quetta_ask 에 session_id 파라미터 추가 예정</span>
+</code></pre></div>
+
+<h2 id="vs">계정별 vs 통합 조회</h2>
+<table>
+<thead>
+<tr>
+<th>시나리오</th>
+<th>호출</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>내가 전에 뭘 물어봤지?</td>
+<td><code>quetta_history_list()</code> (mine_only=True, 기본)</td>
+</tr>
+<tr>
+<td>팀 전체 대화 흐름</td>
+<td><code>quetta_history_list(unified=True)</code></td>
+</tr>
+<tr>
+<td>특정 세션 되돌아보기</td>
+<td><code>quetta_history_get(session_id="X")</code></td>
+</tr>
+<tr>
+<td>전체 활동 요약</td>
+<td><code>quetta_history_stats()</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="_5">관리자 기능</h2>
+<h3 id="_6">세션 삭제</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>curl<span style="color: #bbbbbb"> </span>-X<span style="color: #bbbbbb"> </span>DELETE<span style="color: #bbbbbb"> </span>https://rag.quetta-soft.com/history/session/&lt;SID&gt;<span style="color: #bbbbbb"> </span><span style="color: #AA5D1F; font-weight: bold">\</span>
+<span style="color: #bbbbbb">  </span>-H<span style="color: #bbbbbb"> </span><span style="color: #BA2121">&quot;Authorization: Bearer &lt;MASTER_API_KEY&gt;&quot;</span>
+</code></pre></div>
+
+<h3 id="rest-api">REST API</h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>Auth</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GET</td>
+<td><code>/history/sessions?limit=30&amp;user_hash=X</code></td>
+<td>API key</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/history/session/{sid}?limit=200</code></td>
+<td>API key</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/history/session/{sid}</code></td>
+<td>Master key</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/history/stats</code></td>
+<td>API key</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_7">데이터 보관</h2>
+<ul>
+<li><strong>백업 대상</strong>: MongoDB <code>quetta_agents.conversations</code> 컬렉션</li>
+<li><strong>용량 예상</strong>: 대화 1건 ≈ 5KB → 10만건 ≈ 500MB</li>
+<li><strong>정리 정책</strong>: 수동 (기본은 무기한 보관). 필요 시 TTL 인덱스로 자동 삭제 가능</li>
+<li><strong>GDPR/개인정보</strong>: <code>user_hash</code>는 해시이므로 API 키 자체가 삭제되면 재매칭 불가</li>
+</ul>
+<h2 id="_8">관련 문서</h2>
+<ul>
+<li><a href="#doc-11">공유 메모리</a></li>
+<li><a href="#doc-12">초대 토큰 설치</a></li>
+<li><a href="#doc-08">도구 레퍼런스</a></li>
+</ul>
 </section>
 </body>
 </html>

@@ -14,6 +14,9 @@ Quetta Agents MCP는 **LLM 스마트 라우팅 + 원격 PC(GPU) 제어 + 문서/
 8. [도구 레퍼런스](./08-tools-reference.md) — 전체 도구 상세 파라미터
 9. [환경변수 & 설정](./09-configuration.md) — env 변수, 설치, 업데이트
 10. [운영 가이드](./10-operations.md) — 로그, 트러블슈팅, 모니터링
+11. [공유 메모리 & 멀티 계정](./11-shared-memory.md) — RAG 지식베이스 공유, 세션 자동 초기화
+12. [초대 토큰 설치 시스템](./12-install-token.md) — 관리자 토큰 발급, 팀원 배포
+13. [대화 히스토리 (NoSQL)](./13-conversation-history.md) — MongoDB 자동 저장, 계정별/통합 조회
 
 ---
 
