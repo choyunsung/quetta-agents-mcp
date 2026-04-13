@@ -18,6 +18,7 @@ Quetta Agents MCP는 **LLM 스마트 라우팅 + 원격 PC(GPU) 제어 + 문서/
 12. [초대 토큰 설치 시스템](./12-install-token.md) — 관리자 토큰 발급, 팀원 배포
 13. [대화 히스토리 (NoSQL)](./13-conversation-history.md) — MongoDB 자동 저장, 계정별/통합 조회
 14. [워크스페이스 (멀티 테넌트)](./14-workspaces.md) — 업무/개발 분리, 사용자별 ACL, 접근 요청/승인
+15. [QARS Paper (English)](./15-auto-research-system-paper.md) — 자동연구 시스템 자체에 대한 학술적 기술 (Two case studies: MCG + QARS itself)
 
 ---
 

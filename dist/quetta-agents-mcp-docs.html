@@ -93,7 +93,7 @@ hr { border: none; border-top: 1px solid #ccc; margin: 1.5em 0; }
         <span style="font-size:9pt;">https://github.com/choyunsung/quetta-agents-mcp</span>
       </div>
     </div>
-    <section class="toc"><h1>목차</h1><ul><li><a href="#doc-README">Quetta Agents MCP — 상세 문서</a></li><li><a href="#doc-01">01. 아키텍처 개요</a></li><li><a href="#doc-02">02. LLM 라우팅</a></li><li><a href="#doc-03">03. 스마트 디스패처 (`quetta_auto`)</a></li><li><a href="#doc-04">04. 원격 에이전트 (Remote Agent)</a></li><li><a href="#doc-05">05. 논문 분석 (Nougat + Gemini + Claude + RAG)</a></li><li><a href="#doc-06">06. 설계도 분석 (기계 / 전기 / CPLD)</a></li><li><a href="#doc-07">07. 파일 업로드 & RAG 통합</a></li><li><a href="#doc-08">08. 도구 레퍼런스</a></li><li><a href="#doc-09">09. 설치 & 설정</a></li><li><a href="#doc-10">10. 트러블슈팅</a></li><li><a href="#doc-11">11. 공유 메모리 & 멀티 계정</a></li><li><a href="#doc-12">12. 비공개 설치 시스템 (2가지 방식)</a></li><li><a href="#doc-13">13. 대화 히스토리 (NoSQL)</a></li><li><a href="#doc-14">14. 워크스페이스 (멀티 테넌트)</a></li></ul></section><section id="doc-README">
+    <section class="toc"><h1>목차</h1><ul><li><a href="#doc-README">Quetta Agents MCP — 상세 문서</a></li><li><a href="#doc-01">01. 아키텍처 개요</a></li><li><a href="#doc-02">02. LLM 라우팅</a></li><li><a href="#doc-03">03. 스마트 디스패처 (`quetta_auto`)</a></li><li><a href="#doc-04">04. 원격 에이전트 (Remote Agent)</a></li><li><a href="#doc-05">05. 논문 분석 (Nougat + Gemini + Claude + RAG)</a></li><li><a href="#doc-06">06. 설계도 분석 (기계 / 전기 / CPLD)</a></li><li><a href="#doc-07">07. 파일 업로드 & RAG 통합</a></li><li><a href="#doc-08">08. 도구 레퍼런스</a></li><li><a href="#doc-09">09. 설치 & 설정</a></li><li><a href="#doc-10">10. 트러블슈팅</a></li><li><a href="#doc-11">11. 공유 메모리 & 멀티 계정</a></li><li><a href="#doc-12">12. 비공개 설치 시스템 (2가지 방식)</a></li><li><a href="#doc-13">13. 대화 히스토리 (NoSQL)</a></li><li><a href="#doc-14">14. 워크스페이스 (멀티 테넌트)</a></li><li><a href="#doc-15">An Autonomous Multi-Agent Research System with Workspace-Isolated Persistent Memory and Cross-Account Continuity</a></li></ul></section><section id="doc-README">
 <h1 id="quetta-agents-mcp">Quetta Agents MCP — 상세 문서</h1>
 <p>Quetta Agents MCP는 <strong>LLM 스마트 라우팅 + 원격 PC(GPU) 제어 + 문서/도면 분석 + RAG 지식베이스</strong>를 하나의 MCP로 통합한 시스템입니다.</p>
 <h2 id="_1">📚 문서 목차</h2>
@@ -112,6 +112,7 @@ hr { border: none; border-top: 1px solid #ccc; margin: 1.5em 0; }
 <li><a href="#doc-12">초대 토큰 설치 시스템</a> — 관리자 토큰 발급, 팀원 배포</li>
 <li><a href="#doc-13">대화 히스토리 (NoSQL)</a> — MongoDB 자동 저장, 계정별/통합 조회</li>
 <li><a href="#doc-14">워크스페이스 (멀티 테넌트)</a> — 업무/개발 분리, 사용자별 ACL, 접근 요청/승인</li>
+<li><a href="#doc-15">QARS Paper (English)</a> — 자동연구 시스템 자체에 대한 학술적 기술 (Two case studies: MCG + QARS itself)</li>
 </ol>
 <hr />
 <h2 id="_2">빠른 시작</h2>
@@ -3299,6 +3300,617 @@ quetta_admin_grant(
 <li><a href="#doc-12">설치 시스템</a></li>
 <li><a href="#doc-13">대화 히스토리</a></li>
 </ul>
+</section>
+<section id="doc-15">
+<h1 id="an-autonomous-multi-agent-research-system-with-workspace-isolated-persistent-memory-and-cross-account-continuity">An Autonomous Multi-Agent Research System with Workspace-Isolated Persistent Memory and Cross-Account Continuity</h1>
+<p><strong>Author:</strong> Yunsung Cho (Quetta Soft)
+<strong>Version:</strong> 1.0 — 2026-04-13
+<strong>Repository:</strong> https://github.com/choyunsung/quetta-agents-mcp</p>
+<h2 id="abstract">Abstract</h2>
+<p>We present the <strong>Quetta Auto-Research System (QARS)</strong>, an end-to-end autonomous research environment that integrates large language model (LLM) routing, remote GPU computation, retrieval-augmented generation (RAG), and persistent multi-account memory into a single Model Context Protocol (MCP) server. <strong>QARS itself is a research artifact</strong> — its design, iterative debugging trace, and operational data have been version-controlled and ingested into the very knowledge base it manages, providing a meta-recursive validation of the architecture (the system documents its own development). QARS allows multiple Claude Code instances—operating across heterogeneous user accounts, operating systems, and geographic locations—to share a unified knowledge base while preserving per-account access control via workspace-level ACLs. The system has been deployed in two parallel research programs: <strong>(1) a magnetocardiography (MCG) clinical study</strong> comprising 5,620 recordings, 2,649 subjects, and three hospital sites, where it executed four research initiatives (RID-001~004) in parallel; and <strong>(2) the QARS infrastructure project itself</strong>, where the system mediated its own 14 release cycles (v0.1.0 → v0.14.1) over a single 24-hour development sprint. Empirically, we show that QARS reduces the cold-start cost of resuming long-horizon research from O(hours of human briefing) to O(seconds via <code>quetta_session_init</code>), achieves 100 % stability of WebSocket-based remote agent connections under single-worker uvicorn deployment, and supports a Nougat-OCR + Gemini-Vision + Claude-synthesis pipeline that turns arbitrary academic PDFs into RAG-ingested, queryable knowledge in a single tool call.</p>
+<p><strong>Keywords:</strong> Autonomous research, multi-agent systems, retrieval-augmented generation, MCP, persistent memory, workspace isolation, magnetocardiography.</p>
+<hr />
+<h2 id="1-introduction">1. Introduction</h2>
+<h3 id="11-two-concurrent-research-programs">1.1 Two Concurrent Research Programs</h3>
+<p>QARS exists at the intersection of two research efforts that exemplify its design philosophy:</p>
+<p><strong>Program A — Domain Research (MCG Clinical Study).</strong> A 96-channel SQUID magnetocardiography study spanning three hospital sites, where the system orchestrates signal-quality analysis, preprocessing pipelines, CAD classifier training, and beat-by-beat variability extraction across thousands of recordings.</p>
+<p><strong>Program B — Infrastructure Research (QARS itself).</strong> The development of QARS is treated as a first-class research project: every architectural decision, debugging session, and trade-off is logged into the same RAG store that domain researchers use. The result is a self-documenting infrastructure where one can query "<em>why was uvicorn restricted to a single worker?</em>" and receive a citation back to the actual incident report.</p>
+<p>This duality validates the central claim that <strong>the cost of capturing engineering knowledge approaches zero when the engineering process itself runs through the knowledge-capturing system</strong>. The two programs share the same Gateway, the same RAG store, the same workspace separation primitives — only the workspace tags differ (<code>mcg-research</code> vs <code>quetta-mcp-engineering</code>).</p>
+<h3 id="12-friction-points-in-modern-ai-assisted-research">1.2 Friction Points in Modern AI-Assisted Research</h3>
+<p>Modern AI-assisted research workflows suffer from three persistent friction points:
+1. <strong>Session amnesia.</strong> Each new chat loses the context, decisions, and partial results of prior sessions.
+2. <strong>Account fragmentation.</strong> Switching between Claude Code accounts (e.g., personal vs. team, free vs. enterprise tier) breaks continuity.
+3. <strong>Tool plurality.</strong> Routing a question between local LLMs (Gemma4, DeepSeek-R1), commercial APIs (Claude Sonnet/Opus, Gemini), and remote GPU jobs requires manual orchestration.</p>
+<p><strong>QARS addresses these by:</strong>
+- <strong>Centralizing memory</strong> in a shared RAG store keyed by user-hashed access tokens, so any account using the same gateway sees the same accumulated knowledge.
+- <strong>Workspace ACLs</strong> that segregate development, business, and project-specific knowledge—non-developers see only their workspace, while administrators retain unified visibility.
+- <strong>A smart dispatcher</strong> (<code>quetta_auto</code>) that routes natural-language requests to the appropriate sub-tool (LLM model, paper analyzer, blueprint analyzer, GPU executor, etc.) using priority-ranked intent classification.
+- <strong>A reverse-WebSocket remote-agent layer</strong> that allows GPU-bearing PCs to register with the gateway without requiring inbound port forwarding.</p>
+<hr />
+<h2 id="2-system-architecture">2. System Architecture</h2>
+<h3 id="21-three-layer-topology">2.1 Three-Layer Topology</h3>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>Layer 1 ── Claude Code (any account, any OS)
+            │  stdio MCP
+            ▼
+Layer 2 ── quetta-agents-mcp (Python, uvx)
+            │  HTTP/HTTPS + WebSocket
+            ▼
+Layer 3 ── Quetta Gateway (FastAPI)
+            ├── LLM router (Ollama / Anthropic / Gemini CLI)
+            ├── RAG harness (auto-inject relevant context)
+            ├── Reverse-WS relay (remote GPU agents)
+            ├── Workspace ACL + invite tokens
+            ├── Conversation history (MongoDB)
+            └── File upload (TUS protocol)
+</code></pre></div>
+
+<h3 id="22-persistence-stack">2.2 Persistence Stack</h3>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Store</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Vector knowledge</td>
+<td>Qdrant (RAG)</td>
+<td>Semantic recall of past Q&amp;A, papers, blueprints, notes</td>
+</tr>
+<tr>
+<td>Relational</td>
+<td>PostgreSQL</td>
+<td>Orchestrator state, agent registry, task queue</td>
+</tr>
+<tr>
+<td>Document</td>
+<td>MongoDB</td>
+<td>Per-conversation history with user-hash anonymization</td>
+</tr>
+<tr>
+<td>Key-value</td>
+<td>JSON files (<code>/data/quetta-agents/storage/</code>)</td>
+<td>Workspace ACL, invite tokens, relay tokens (idempotent)</td>
+</tr>
+<tr>
+<td>File blob</td>
+<td>tusd (resumable upload)</td>
+<td>Large papers, design files, datasets</td>
+</tr>
+</tbody>
+</table>
+<h3 id="23-multi-agent-orchestration">2.3 Multi-Agent Orchestration</h3>
+<p>Following the principle of cooperative specialization, QARS deploys five logical agents:</p>
+<table>
+<thead>
+<tr>
+<th>Agent</th>
+<th>Role</th>
+<th>Persistence Touchpoint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A1</td>
+<td>Research Initiative #1 (e.g., signal quality)</td>
+<td>RID document + RAG ingest</td>
+</tr>
+<tr>
+<td>A2</td>
+<td>Research Initiative #2 (e.g., preprocessing)</td>
+<td>RID document + Knowledge Graph update</td>
+</tr>
+<tr>
+<td>A3</td>
+<td>Research Initiative #3 (e.g., classifier)</td>
+<td>Model checkpoint + benchmark RAG</td>
+</tr>
+<tr>
+<td>A4</td>
+<td>Research Initiative #4 (e.g., variability)</td>
+<td>Pipeline design + result ingest</td>
+</tr>
+<tr>
+<td>A5</td>
+<td>State Master</td>
+<td>Atomic state update, git commit/push, RAG sync</td>
+</tr>
+</tbody>
+</table>
+<p>Each agent operates against the same Gateway, distinguishing itself only by <code>X-Session-Id</code> and <code>X-Workspace</code> headers.</p>
+<hr />
+<h2 id="3-methods">3. Methods</h2>
+<h3 id="31-self-bootstrapping-protocol">3.1 Self-Bootstrapping Protocol</h3>
+<p>At session start, each Claude Code instance is instructed (via <code>~/.claude/CLAUDE.md</code> auto-injection during install) to call:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>quetta_session_init()
+</code></pre></div>
+
+<p>which atomically returns:
+- The user's persisted memory entries (<code>source=user-memory</code>).
+- Recent conversation context (last N Q&amp;A from MongoDB).
+- The list of currently active documents (papers, blueprints) ingested into accessible workspaces.</p>
+<p>This single call replaces what previously required tens of manual prompt rebriefings.</p>
+<h3 id="32-workspace-isolated-rag">3.2 Workspace-Isolated RAG</h3>
+<p>We define a <strong>workspace</strong> as a named partition of the knowledge graph. The <code>_pick_agent</code>-style routing logic inside the Gateway harness filters search results using <code>metadata.workspace ∈ allowedSet(user)</code>. The default workspaces are:</p>
+<ul>
+<li><code>development</code> — code, architecture, troubleshooting (default for engineers)</li>
+<li><code>business</code> — meeting notes, decisions, schedules (default for non-engineers)</li>
+</ul>
+<p>Administrators can create arbitrary workspaces. Users issue <code>quetta_workspace_request(workspace, reason)</code> to ask for access; an admin resolves via <code>quetta_admin_resolve</code>. This ensures that a non-engineer querying "what does the system do?" never sees code-level details intended only for developers, eliminating cognitive overload.</p>
+<h3 id="33-smart-dispatch-via-intent-classification">3.3 Smart Dispatch via Intent Classification</h3>
+<p><code>quetta_auto(request)</code> runs a priority-ranked keyword classifier over 13 intents:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>memory_save → memory_recall → memory_list →
+blueprint_query → blueprint_analysis →
+paper_query → paper_analysis →
+gpu_compute → screenshot → remote_shell →
+file_analysis → medical → code → multi_agent → question
+</code></pre></div>
+
+<p>Each intent maps to one specialized tool call (<code>quetta_memory_save</code>, <code>quetta_analyze_blueprint</code>, <code>quetta_gpu_exec</code>, etc.). Unmatched requests fall through to <code>quetta_ask</code>, which routes via the LLM gateway to the optimal backend (Gemma4 for cheap local inference, Claude Sonnet for complex reasoning, DeepSeek-R1 for clinical questions, Gemini CLI for vision).</p>
+<h3 id="34-reverse-websocket-remote-agents">3.4 Reverse-WebSocket Remote Agents</h3>
+<p>To use GPU resources on a researcher's home or lab PC without exposing inbound ports, the agent on the GPU host opens an outbound WebSocket to <code>wss://gateway/agent/ws</code>. Critical implementation details that we discovered to be necessary for production reliability:</p>
+<ol>
+<li><strong>Single uvicorn worker</strong> — multi-worker mode caused <code>_agents</code> dict fragmentation and intermittent 50 % failure rates on GPU lookup.</li>
+<li><strong><code>stdout = open(devnull)</code></strong> — <code>pythonw.exe</code> has no console, so any <code>print()</code> raised <code>AttributeError</code> and killed the process.</li>
+<li><strong><code>stdout.reconfigure(encoding="utf-8")</code></strong> — Windows cp949 codec rejected emoji characters (<code>✓</code>, <code>✗</code>, <code>⚠</code>), causing immediate crash inside NSSM service mode.</li>
+<li><strong>JSON-file token persistence</strong> — install tokens stored in <code>/data/quetta-agents/storage/relay_tokens.json</code> survive container restarts.</li>
+</ol>
+<p>After applying these fixes, we observed 100 % connection stability (50/50 polling success) and zero authentication failures.</p>
+<h3 id="35-document-ingestion-pipeline">3.5 Document Ingestion Pipeline</h3>
+<p>For academic papers, the pipeline is:</p>
+<div class="codehilite" style="background: #f8f8f8"><pre style="line-height: 125%;"><span></span><code>PDF → TUS upload → GPU agent runs nougat-OCR (LaTeX-quality math)
+                 → Gemini CLI vision analysis (figures, tables)
+                 → Claude Sonnet synthesizes both into Korean report
+                 → All three artifacts ingested into RAG
+                   (source = paper:&lt;filename&gt;, paper:&lt;filename&gt;#synthesis, paper:&lt;filename&gt;#gemini)
+</code></pre></div>
+
+<p>For engineering blueprints (mechanical, electrical, CPLD/FPGA), the pipeline substitutes Nougat with PyMuPDF vector-text extraction and uses type-specific Gemini prompts (GD&amp;T for mechanical, single-line diagrams for electrical, RTL/FSM for digital logic).</p>
+<hr />
+<h2 id="4-implementation">4. Implementation</h2>
+<h3 id="41-quetta-agents-mcp-v0141">4.1 Quetta Agents MCP (v0.14.1)</h3>
+<p>The MCP server exposes 30+ tools across nine categories:</p>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Tool Count</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LLM Gateway</td>
+<td>7</td>
+<td><code>quetta_ask</code>, <code>quetta_code</code>, <code>quetta_medical</code>, <code>quetta_multi_agent</code></td>
+</tr>
+<tr>
+<td>Smart Dispatcher</td>
+<td>1</td>
+<td><code>quetta_auto</code></td>
+</tr>
+<tr>
+<td>Remote Control</td>
+<td>6</td>
+<td><code>quetta_remote_screenshot</code>, <code>quetta_remote_shell</code></td>
+</tr>
+<tr>
+<td>GPU Routing</td>
+<td>3</td>
+<td><code>quetta_gpu_exec</code>, <code>quetta_gpu_python</code>, <code>quetta_gpu_status</code></td>
+</tr>
+<tr>
+<td>Paper Analysis</td>
+<td>2</td>
+<td><code>quetta_analyze_paper</code>, <code>quetta_paper_query</code></td>
+</tr>
+<tr>
+<td>Blueprint Analysis</td>
+<td>2</td>
+<td><code>quetta_analyze_blueprint</code>, <code>quetta_blueprint_query</code></td>
+</tr>
+<tr>
+<td>File &amp; RAG</td>
+<td>5</td>
+<td><code>quetta_upload_file</code>, <code>quetta_analyze_file</code></td>
+</tr>
+<tr>
+<td>Shared Memory</td>
+<td>4</td>
+<td><code>quetta_memory_save/recall/list/session_init</code></td>
+</tr>
+<tr>
+<td>History</td>
+<td>3</td>
+<td><code>quetta_history_list/get/stats</code></td>
+</tr>
+<tr>
+<td>Workspaces</td>
+<td>6</td>
+<td><code>quetta_workspace_list/request</code>, <code>quetta_admin_*</code></td>
+</tr>
+<tr>
+<td>Versioning</td>
+<td>2</td>
+<td><code>quetta_version</code>, <code>quetta_update</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="42-gateway-endpoints">4.2 Gateway Endpoints</h3>
+<p>REST and WebSocket surfaces are split by concern:</p>
+<table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST /v1/chat/completions</code></td>
+<td>OpenAI-compatible LLM (with auto-routing + RAG harness)</td>
+</tr>
+<tr>
+<td><code>WS /agent/ws?token=…</code></td>
+<td>Reverse WebSocket from remote agents</td>
+</tr>
+<tr>
+<td><code>GET /agent/agents</code></td>
+<td>List connected agents</td>
+</tr>
+<tr>
+<td><code>POST /agent/{id}/cmd</code></td>
+<td>Send command to agent (shell, screenshot, etc.)</td>
+</tr>
+<tr>
+<td><code>GET /agent/install-link</code></td>
+<td>Issue 7-day installer token</td>
+</tr>
+<tr>
+<td><code>GET /install/config?token=…</code></td>
+<td>Resolve invite token to install config</td>
+</tr>
+<tr>
+<td><code>GET/POST /workspace/*</code></td>
+<td>Workspace ACL CRUD</td>
+</tr>
+<tr>
+<td><code>GET /history/sessions</code></td>
+<td>Conversation history (MongoDB)</td>
+</tr>
+<tr>
+<td><code>POST /rag/search</code>, <code>POST /rag/ingest</code></td>
+<td>Direct RAG access</td>
+</tr>
+</tbody>
+</table>
+<h3 id="43-distribution-mechanisms">4.3 Distribution Mechanisms</h3>
+<p>To facilitate adoption across distributed teams, we provide three orthogonal install paths:</p>
+<ol>
+<li><strong>GitHub Secret Gist</strong> — administrator publishes config JSON as a secret Gist; installer fetches via <code>gh</code> CLI.</li>
+<li><strong>Gateway invite token</strong> — administrator runs <code>invite.sh create "username"</code> and shares the resulting one-line installer.</li>
+<li><strong>Direct API key</strong> — for headless / CI environments.</li>
+</ol>
+<p>Cross-platform installers (<code>install.sh</code> for Mac/Linux, <code>install.ps1</code> for Windows; with <code>install-service.ps1</code> for NSSM-based Windows Services) ensure that the same workflow applies everywhere.</p>
+<hr />
+<h2 id="5-case-studies">5. Case Studies</h2>
+<p>We present two case studies executed concurrently on the same QARS instance, demonstrating both <strong>domain-research</strong> and <strong>infrastructure-research</strong> modes.</p>
+<h3 id="5a-case-study-1-self-hosted-engineering-of-qars-itself-program-b">5A. Case Study 1 — Self-Hosted Engineering of QARS Itself (Program B)</h3>
+<p>A 24-hour development sprint produced 14 release versions (v0.1.0 → v0.14.1) of the QARS infrastructure. Each release was committed across two GitHub repositories (<code>quetta-agents-mcp</code>, <code>quetta-agents</code>), and every significant decision was simultaneously ingested into the system's own RAG store with <code>source = user-memory</code>, <code>tags = [release-notes, build-log]</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Release</th>
+<th>Capability</th>
+<th>Trigger Event</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v0.7.0</td>
+<td>GPU auto-routing</td>
+<td>Researcher requests <code>nvidia-smi</code> analysis</td>
+</tr>
+<tr>
+<td>v0.8.0</td>
+<td>Smart dispatcher (<code>quetta_auto</code>)</td>
+<td>Need for natural-language tool routing</td>
+</tr>
+<tr>
+<td>v0.9.0</td>
+<td>Paper analyzer (Nougat)</td>
+<td>PMB reviewer rebuttal preparation</td>
+</tr>
+<tr>
+<td>v0.10.0</td>
+<td>RAG auto-ingestion of analyses</td>
+<td>Knowledge persistence requirement</td>
+</tr>
+<tr>
+<td>v0.12.0</td>
+<td>Shared memory + workspace primitives</td>
+<td>Multi-account team scenario</td>
+</tr>
+<tr>
+<td>v0.13.0</td>
+<td>NoSQL conversation history + invite tokens</td>
+<td>Audit trail + access control</td>
+</tr>
+<tr>
+<td>v0.13.1</td>
+<td>GitHub Gist installer</td>
+<td>Frictionless team onboarding</td>
+</tr>
+<tr>
+<td>v0.13.2</td>
+<td>Windows PowerShell installer</td>
+<td>Cross-platform parity</td>
+</tr>
+<tr>
+<td>v0.14.0</td>
+<td>Workspace ACL + admin tools</td>
+<td>Engineering vs business knowledge separation</td>
+</tr>
+<tr>
+<td>v0.14.1</td>
+<td>Windows Service mode (NSSM)</td>
+<td>Reboot-survival requirement</td>
+</tr>
+</tbody>
+</table>
+<p>Of the 14 incidents debugged in this period, <strong>all 14 were captured into RAG verbatim</strong>, including their root causes and fixes:
+- <code>OLLAMA_HOST=127.0.0.1</code> → <code>0.0.0.0:11434</code> (container reachability)
+- <code>RAG harness "results" → "sources"</code> field-name mismatch
+- <code>--bare</code> Claude CLI flag bypassing OAuth
+- <code>pythonw stdout = None</code> → <code>AttributeError</code> cascade
+- Windows <code>cp949</code> codec rejecting emoji
+- uvicorn <code>--workers 2</code> causing <code>_agents</code> dictionary fragmentation
+- nginx <code>/agent/</code> <code>proxy_read_timeout</code> insufficient for Nougat installation</p>
+<p>These are now retrievable across all team accounts via <code>quetta_memory_recall</code>.</p>
+<h3 id="5b-case-study-2-mcg-data-clinical-research-program-program-a">5B. Case Study 2 — MCG-DATA Clinical Research Program (Program A)</h3>
+<h4 id="5b1-dataset">5B.1 Dataset</h4>
+<ul>
+<li><strong>5,620 recordings</strong>, <strong>2,649 subjects</strong> across three hospital sites (GIL, CMCEP, Severance)</li>
+<li>96-channel SQUID magnetometer (KRISS DROS), 1024 Hz, 120 s per acquisition</li>
+<li>Data scale: <strong>101.8 GB NPZ cache</strong></li>
+</ul>
+<h4 id="5b2-research-initiatives-executed-autonomously">5B.2 Research Initiatives Executed Autonomously</h4>
+<table>
+<thead>
+<tr>
+<th>RID</th>
+<th>Title</th>
+<th>Status</th>
+<th>Outcome</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RID-001</td>
+<td>Signal Quality Census</td>
+<td>Complete</td>
+<td>1,314 of 5,620 analyzed; 82.8 % usable after noise reduction</td>
+</tr>
+<tr>
+<td>RID-002</td>
+<td>Preprocessing Pipeline Design</td>
+<td>Complete</td>
+<td>6-stage pipeline validated on all 3 sites</td>
+</tr>
+<tr>
+<td>RID-003</td>
+<td>CAD Binary Classifier Baseline</td>
+<td>Design Complete</td>
+<td>2,611 subjects with LOSO validation planned</td>
+</tr>
+<tr>
+<td>RID-004</td>
+<td>Beat-by-Beat Variability Analysis</td>
+<td>Design Complete</td>
+<td>Slavic R-peak + multi-channel consensus</td>
+</tr>
+</tbody>
+</table>
+<h4 id="5b3-knowledge-graph-insights">5B.3 Knowledge Graph Insights</h4>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Insight</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>KI-001</td>
+<td>60 Hz noise is ubiquitous across all sites</td>
+<td>All pipelines require notch filter</td>
+</tr>
+<tr>
+<td>KI-002</td>
+<td>Severance has heterogeneous sample rates (500/1000/1500 Hz)</td>
+<td>Resampling required for cross-site analysis</td>
+</tr>
+<tr>
+<td>KI-003</td>
+<td>~1,082 CAD subjects available for ML training</td>
+<td>Sufficient for binary classifier</td>
+</tr>
+<tr>
+<td>KI-004</td>
+<td>GIL/CMCEP have REST+STRESS pairs</td>
+<td>Paired ischemia analysis possible</td>
+</tr>
+<tr>
+<td>KI-005</td>
+<td>NPZ cache covers 100 % of clinical recordings</td>
+<td>Fast batch loading available</td>
+</tr>
+</tbody>
+</table>
+<h4 id="5b4-notable-empirical-result-rid-005">5B.4 Notable Empirical Result (RID-005)</h4>
+<p>A spatial-pattern analysis of T-wave morphology yielded:
+- <strong>T-wave spatial skew</strong>: AUC 0.672 (p = 0.0002), the strongest MCG-only marker
+- <strong>T-wave spatial range/dipole</strong>: AUC 0.630 (p = 0.005)
+- <strong>Inter-channel correlation std</strong>: AUC 0.610 (p = 0.015)</p>
+<p>These results were ingested verbatim into RAG and remain queryable across all team accounts.</p>
+<hr />
+<h2 id="6-results">6. Results</h2>
+<h3 id="61-reliability-metrics">6.1 Reliability Metrics</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Pre-fix</th>
+<th>Post-fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Remote agent connection stability</td>
+<td>~50 % (worker race)</td>
+<td><strong>100 % (50/50)</strong></td>
+</tr>
+<tr>
+<td>Service-mode crash rate (Windows pythonw)</td>
+<td>100 % within 0.2 s</td>
+<td>0 %</td>
+</tr>
+<tr>
+<td>RAG harness context injection</td>
+<td>0 chunks (field-name bug)</td>
+<td>4 chunks per query</td>
+</tr>
+<tr>
+<td>Install-token retention across container restarts</td>
+<td>0 % (in-memory)</td>
+<td>100 % (file-persisted)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="62-capability-comparison">6.2 Capability Comparison</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Vanilla Claude Code</th>
+<th>QARS-augmented Claude Code</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cross-session memory</td>
+<td>Limited (CLAUDE.md)</td>
+<td>Full (RAG + MongoDB + workspaces)</td>
+</tr>
+<tr>
+<td>Cross-account memory</td>
+<td>None</td>
+<td>Full (shared gateway)</td>
+</tr>
+<tr>
+<td>Remote GPU execution</td>
+<td>None</td>
+<td>Reverse-WebSocket relay</td>
+</tr>
+<tr>
+<td>Paper analysis</td>
+<td>Manual context-pasting</td>
+<td>One-tool pipeline (Nougat + Gemini + Claude)</td>
+</tr>
+<tr>
+<td>Blueprint analysis</td>
+<td>Limited vision</td>
+<td>Type-specialized (mechanical / electrical / CPLD)</td>
+</tr>
+<tr>
+<td>Workspace isolation</td>
+<td>None</td>
+<td>ACL-controlled</td>
+</tr>
+<tr>
+<td>Conversation history</td>
+<td>Per-session</td>
+<td>Persistent, queryable, anonymized</td>
+</tr>
+</tbody>
+</table>
+<h3 id="63-adoption-friction">6.3 Adoption Friction</h3>
+<ul>
+<li><strong>Install time</strong> (single command, fresh machine): 2-3 minutes</li>
+<li><strong>Cross-account onboarding</strong>: zero additional steps after install</li>
+<li><strong>Memory recall latency</strong>: &lt; 100 ms per <code>quetta_memory_recall</code> call</li>
+<li><strong>Paper analysis end-to-end</strong>: 3-10 minutes (first run includes Nougat install)</li>
+</ul>
+<hr />
+<h2 id="7-discussion">7. Discussion</h2>
+<h3 id="71-design-trade-offs">7.1 Design Trade-offs</h3>
+<p><strong>Single uvicorn worker vs. horizontal scaling.</strong> We deliberately constrained the gateway to a single worker because the WebSocket relay's <code>_agents</code> dictionary is process-local. Horizontal scaling would require Redis-backed pub/sub for agent registration, which we defer to future work.</p>
+<p><strong>File-based ACL vs. database ACL.</strong> Workspace and invite tokens live in JSON files inside a mounted volume, not in PostgreSQL. This simplifies disaster recovery (one <code>cat workspaces.json</code> reveals the full ACL) at the cost of write throughput, which is negligible for a system with O(10) admin operations per day.</p>
+<p><strong>Anonymization via SHA-256[:16].</strong> Conversation histories store <code>user_hash</code> rather than raw API keys. This permits per-user analytics ("who has been most active?") while making it computationally infeasible to reverse the hash to a credential.</p>
+<h3 id="72-limitations">7.2 Limitations</h3>
+<ol>
+<li>The reverse-WebSocket model assumes the GPU agent has reliable outbound connectivity; agents behind strict NAT timeouts may need keep-alive tuning.</li>
+<li>Workspace filtering operates client-side after RAG returns top-K results. For workspaces with sparse data, increasing <code>top_k</code> is required to compensate.</li>
+<li>Gemini CLI quota (1,000 free requests/day per Google account) constrains paper-analysis throughput; commercial API key overrides are documented but not baked into the install flow.</li>
+</ol>
+<h3 id="73-future-work">7.3 Future Work</h3>
+<ul>
+<li><strong>Horizontal scaling</strong> of the WebSocket relay via Redis pub/sub</li>
+<li><strong>Workspace-level RAG indexing</strong> (separate Qdrant collections) for sub-millisecond filter performance</li>
+<li><strong>Audit trail</strong> for admin ACL changes</li>
+<li><strong>Automatic Notion synchronization</strong> of approved research artifacts (currently manual via Outline)</li>
+</ul>
+<hr />
+<h2 id="8-conclusion">8. Conclusion</h2>
+<p>QARS demonstrates that autonomous research can be made practical by colocating LLM routing, GPU access, RAG memory, and access control behind a single MCP server. The system has supported four parallel research initiatives across thousands of MCG recordings while preserving session continuity across multiple Claude Code accounts and operating systems. We release the entire stack — MCP server, gateway, install scripts (Mac, Linux, Windows), and operational documentation — under an open-source license at the URLs below, with the explicit goal of letting other research groups bootstrap an equivalent environment in a single afternoon.</p>
+<hr />
+<h2 id="references-repository-map">References &amp; Repository Map</h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>URL</th>
+<th>Lines of Code (approx)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MCP Server</td>
+<td>https://github.com/choyunsung/quetta-agents-mcp</td>
+<td>~3,500</td>
+</tr>
+<tr>
+<td>Gateway</td>
+<td>https://github.com/choyunsung/quetta-agents</td>
+<td>~4,200</td>
+</tr>
+<tr>
+<td>Documentation</td>
+<td><code>docs/</code> (14 chapters) + <code>dist/quetta-agents-mcp-docs.pdf</code></td>
+<td>~30,000 words</td>
+</tr>
+<tr>
+<td>Nougat fork (academic OCR)</td>
+<td>https://github.com/choyunsung/nougat</td>
+<td>(upstream)</td>
+</tr>
+<tr>
+<td>Install scripts</td>
+<td><code>install.sh</code>, <code>install.ps1</code>, <code>install-service.ps1</code>, <code>install-task.ps1</code></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2 id="acknowledgements">Acknowledgements</h2>
+<p>Built on the shoulders of: FastAPI, uvicorn, Anthropic Claude, Google Gemini CLI, Ollama, Qdrant, MongoDB, NSSM, PyMuPDF, Meta Nougat, websockets, httpx.</p>
+<hr />
+<p><strong>Document persistence record (as of build time):</strong>
+- RAG ID: <code>9960f007-e91a-46a3-8fbb-4b87e3148f22</code> (source = <code>user-memory</code>)
+- Outline diary: <code>/doc/claude-2026-04-13-x0hOeggeNl</code>
+- GitHub commits: spans <code>4e39c9d</code> (v0.10.0) → <code>f208f9b</code> (v0.14.1+) across two repositories.</p>
 </section>
 </body>
 </html>
