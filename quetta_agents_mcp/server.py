@@ -362,32 +362,60 @@ async def _install_nougat_on_agent(agent_id: str) -> str:
 
 
 async def _run_nougat_on_agent(agent_id: str, pdf_url: str, pdf_token: str = "") -> str:
-    """GPU 에이전트에서 PDF URL 다운로드 → nougat 실행 → 결과 mmd 반환."""
-    # 작업 디렉토리 준비 + PDF 다운로드
+    """GPU 에이전트에서 PDF URL 다운로드 → nougat 실행 → 결과 mmd 반환.
+
+    원격 PC가 Windows이면 venv 경로(`.quetta-remote-agent\\venv-nougat`)에서 nougat 실행.
+    Linux/Mac이면 시스템 nougat 사용.
+    """
+    # 1) 호스트 OS 판별
+    h = await _relay(agent_id, "shell", {"command": "echo OS:%OS%", "timeout": 5}, timeout=10)
+    is_windows = "Windows" in (h.get("data", {}).get("stdout", "") or "")
+
+    # 2) 작업 디렉토리 + PDF 다운로드
     tok_hdr = f'-H "X-API-Token: {pdf_token}"' if pdf_token else ""
-    setup = (
-        "mkdir -p /tmp/quetta_paper && cd /tmp/quetta_paper && "
-        "rm -rf input output && mkdir input output && "
-        f'curl -fsSL {tok_hdr} "{pdf_url}" -o input/paper.pdf && '
-        "ls -la input/"
-    )
+    if is_windows:
+        # Windows
+        setup = (
+            f'powershell -Command "$d=Join-Path $env:TEMP \'quetta_paper\'; '
+            f'Remove-Item -Recurse -Force $d -EA SilentlyContinue; '
+            f'New-Item -ItemType Directory -Force $d\\input,$d\\output | Out-Null; '
+            f'curl.exe -fsSL {tok_hdr} \\"{pdf_url}\\" -o $d\\input\\paper.pdf; '
+            f'Get-Item $d\\input\\paper.pdf | Select-Object FullName,Length"'
+        )
+    else:
+        setup = (
+            "mkdir -p /tmp/quetta_paper && cd /tmp/quetta_paper && "
+            "rm -rf input output && mkdir input output && "
+            f'curl -fsSL {tok_hdr} "{pdf_url}" -o input/paper.pdf && '
+            "ls -la input/"
+        )
     r = await _relay(agent_id, "shell", {"command": setup, "timeout": 300}, timeout=310)
     data = r.get("data", {})
     if data.get("returncode") != 0:
-        raise RuntimeError(f"PDF 다운로드 실패: {data.get('stderr','')}")
+        raise RuntimeError(f"PDF 다운로드 실패: {data.get('stderr','')[:300]}")
 
-    # nougat 실행 (CLI: nougat <pdf> -o <out_dir>)
-    run = (
-        "cd /tmp/quetta_paper && "
-        "nougat input/paper.pdf -o output/ --no-skipping 2>&1 | tail -30 && "
-        "echo --- && "
-        "ls output/ && echo --- && "
-        "cat output/paper.mmd 2>/dev/null || cat output/*.mmd 2>/dev/null"
-    )
-    r = await _relay(agent_id, "shell", {"command": run, "timeout": 1800}, timeout=1810)
+    # 3) nougat 실행 (D 드라이브 venv)
+    if is_windows:
+        venv_py = r"D:\quetta-nougat\venv\Scripts\python.exe"
+        run = (
+            f'powershell -Command "$d=Join-Path $env:TEMP \'quetta_paper\'; cd $d; '
+            f'& \'{venv_py}\' -m nougat \'$d\\input\\paper.pdf\' -o \'$d\\output\' --no-skipping 2>&1 | Select-Object -Last 30; '
+            f'Write-Host \'---\'; '
+            f'Get-ChildItem $d\\output | Select-Object Name; Write-Host \'---\'; '
+            f'Get-Content $d\\output\\paper.mmd -EA SilentlyContinue; '
+            f'if (-not (Test-Path $d\\output\\paper.mmd)) {{ Get-ChildItem $d\\output\\*.mmd | ForEach-Object {{ Get-Content $_ }} }}"'
+        )
+    else:
+        run = (
+            "cd /tmp/quetta_paper && "
+            "nougat input/paper.pdf -o output/ --no-skipping 2>&1 | tail -30 && "
+            "echo --- && "
+            "ls output/ && echo --- && "
+            "cat output/paper.mmd 2>/dev/null || cat output/*.mmd 2>/dev/null"
+        )
+    r = await _relay(agent_id, "shell", {"command": run, "timeout": 1700}, timeout=1750)
     data = r.get("data", {})
     out = data.get("stdout", "")
-    # '---' 이후의 내용이 mmd 본문
     parts = out.split("---")
     return parts[-1].strip() if len(parts) >= 3 else out
 
