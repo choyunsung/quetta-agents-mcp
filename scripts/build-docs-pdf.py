@@ -29,6 +29,7 @@ ORDER = [
     "13-conversation-history.md",
     "14-workspaces.md",
     "15-auto-research-system-paper.md",
+    "16-user-guide.md",
 ]
 
 try:
