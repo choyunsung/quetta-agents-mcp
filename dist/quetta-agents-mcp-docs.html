@@ -3307,21 +3307,21 @@ quetta_admin_grant(
 <strong>Version:</strong> 1.0 — 2026-04-13
 <strong>Repository:</strong> https://github.com/choyunsung/quetta-agents-mcp</p>
 <h2 id="abstract">Abstract</h2>
-<p>We present the <strong>Quetta Auto-Research System (QARS)</strong>, an end-to-end autonomous research environment that integrates large language model (LLM) routing, remote GPU computation, retrieval-augmented generation (RAG), and persistent multi-account memory into a single Model Context Protocol (MCP) server. <strong>QARS itself is a research artifact</strong> — its design, iterative debugging trace, and operational data have been version-controlled and ingested into the very knowledge base it manages, providing a meta-recursive validation of the architecture (the system documents its own development). QARS allows multiple Claude Code instances—operating across heterogeneous user accounts, operating systems, and geographic locations—to share a unified knowledge base while preserving per-account access control via workspace-level ACLs. The system has been deployed in two parallel research programs: <strong>(1) a magnetocardiography (MCG) clinical study</strong> comprising 5,620 recordings, 2,649 subjects, and three hospital sites, where it executed four research initiatives (RID-001~004) in parallel; and <strong>(2) the QARS infrastructure project itself</strong>, where the system mediated its own 14 release cycles (v0.1.0 → v0.14.1) over a single 24-hour development sprint. Empirically, we show that QARS reduces the cold-start cost of resuming long-horizon research from O(hours of human briefing) to O(seconds via <code>quetta_session_init</code>), achieves 100 % stability of WebSocket-based remote agent connections under single-worker uvicorn deployment, and supports a Nougat-OCR + Gemini-Vision + Claude-synthesis pipeline that turns arbitrary academic PDFs into RAG-ingested, queryable knowledge in a single tool call.</p>
+<p>We present the <strong>Autonomous Research System (ARS)</strong>, an end-to-end autonomous research environment that integrates large language model (LLM) routing, remote GPU computation, retrieval-augmented generation (RAG), and persistent multi-account memory into a single Model Context Protocol (MCP) server. <strong>ARS itself is a research artifact</strong> — its design, iterative debugging trace, and operational data have been version-controlled and ingested into the very knowledge base it manages, providing a meta-recursive validation of the architecture (the system documents its own development). ARS allows multiple Claude Code instances—operating across heterogeneous user accounts, operating systems, and geographic locations—to share a unified knowledge base while preserving per-account access control via workspace-level ACLs. The system has been deployed in two parallel research programs: <strong>(1) a magnetocardiography (MCG) clinical study</strong> comprising 5,620 recordings, 2,649 subjects, and three hospital sites, where it executed four research initiatives (RID-001~004) in parallel; and <strong>(2) the ARS infrastructure project itself</strong>, where the system mediated its own 14 release cycles (v0.1.0 → v0.14.1) over a single 24-hour development sprint. Empirically, we show that ARS reduces the cold-start cost of resuming long-horizon research from O(hours of human briefing) to O(seconds via <code>quetta_session_init</code>), achieves 100 % stability of WebSocket-based remote agent connections under single-worker uvicorn deployment, and supports a Nougat-OCR + Gemini-Vision + Claude-synthesis pipeline that turns arbitrary academic PDFs into RAG-ingested, queryable knowledge in a single tool call.</p>
 <p><strong>Keywords:</strong> Autonomous research, multi-agent systems, retrieval-augmented generation, MCP, persistent memory, workspace isolation, magnetocardiography.</p>
 <hr />
 <h2 id="1-introduction">1. Introduction</h2>
 <h3 id="11-two-concurrent-research-programs">1.1 Two Concurrent Research Programs</h3>
-<p>QARS exists at the intersection of two research efforts that exemplify its design philosophy:</p>
+<p>ARS exists at the intersection of two research efforts that exemplify its design philosophy:</p>
 <p><strong>Program A — Domain Research (MCG Clinical Study).</strong> A 96-channel SQUID magnetocardiography study spanning three hospital sites, where the system orchestrates signal-quality analysis, preprocessing pipelines, CAD classifier training, and beat-by-beat variability extraction across thousands of recordings.</p>
-<p><strong>Program B — Infrastructure Research (QARS itself).</strong> The development of QARS is treated as a first-class research project: every architectural decision, debugging session, and trade-off is logged into the same RAG store that domain researchers use. The result is a self-documenting infrastructure where one can query "<em>why was uvicorn restricted to a single worker?</em>" and receive a citation back to the actual incident report.</p>
+<p><strong>Program B — Infrastructure Research (ARS itself).</strong> The development of ARS is treated as a first-class research project: every architectural decision, debugging session, and trade-off is logged into the same RAG store that domain researchers use. The result is a self-documenting infrastructure where one can query "<em>why was uvicorn restricted to a single worker?</em>" and receive a citation back to the actual incident report.</p>
 <p>This duality validates the central claim that <strong>the cost of capturing engineering knowledge approaches zero when the engineering process itself runs through the knowledge-capturing system</strong>. The two programs share the same Gateway, the same RAG store, the same workspace separation primitives — only the workspace tags differ (<code>mcg-research</code> vs <code>quetta-mcp-engineering</code>).</p>
 <h3 id="12-friction-points-in-modern-ai-assisted-research">1.2 Friction Points in Modern AI-Assisted Research</h3>
 <p>Modern AI-assisted research workflows suffer from three persistent friction points:
 1. <strong>Session amnesia.</strong> Each new chat loses the context, decisions, and partial results of prior sessions.
 2. <strong>Account fragmentation.</strong> Switching between Claude Code accounts (e.g., personal vs. team, free vs. enterprise tier) breaks continuity.
 3. <strong>Tool plurality.</strong> Routing a question between local LLMs (Gemma4, DeepSeek-R1), commercial APIs (Claude Sonnet/Opus, Gemini), and remote GPU jobs requires manual orchestration.</p>
-<p><strong>QARS addresses these by:</strong>
+<p><strong>ARS addresses these by:</strong>
 - <strong>Centralizing memory</strong> in a shared RAG store keyed by user-hashed access tokens, so any account using the same gateway sees the same accumulated knowledge.
 - <strong>Workspace ACLs</strong> that segregate development, business, and project-specific knowledge—non-developers see only their workspace, while administrators retain unified visibility.
 - <strong>A smart dispatcher</strong> (<code>quetta_auto</code>) that routes natural-language requests to the appropriate sub-tool (LLM model, paper analyzer, blueprint analyzer, GPU executor, etc.) using priority-ranked intent classification.
@@ -3382,7 +3382,7 @@ Layer 3 ── Quetta Gateway (FastAPI)
 </tbody>
 </table>
 <h3 id="23-multi-agent-orchestration">2.3 Multi-Agent Orchestration</h3>
-<p>Following the principle of cooperative specialization, QARS deploys five logical agents:</p>
+<p>Following the principle of cooperative specialization, ARS deploys five logical agents:</p>
 <table>
 <thead>
 <tr>
@@ -3596,9 +3596,9 @@ file_analysis → medical → code → multi_agent → question
 <p>Cross-platform installers (<code>install.sh</code> for Mac/Linux, <code>install.ps1</code> for Windows; with <code>install-service.ps1</code> for NSSM-based Windows Services) ensure that the same workflow applies everywhere.</p>
 <hr />
 <h2 id="5-case-studies">5. Case Studies</h2>
-<p>We present two case studies executed concurrently on the same QARS instance, demonstrating both <strong>domain-research</strong> and <strong>infrastructure-research</strong> modes.</p>
-<h3 id="5a-case-study-1-self-hosted-engineering-of-qars-itself-program-b">5A. Case Study 1 — Self-Hosted Engineering of QARS Itself (Program B)</h3>
-<p>A 24-hour development sprint produced 14 release versions (v0.1.0 → v0.14.1) of the QARS infrastructure. Each release was committed across two GitHub repositories (<code>quetta-agents-mcp</code>, <code>quetta-agents</code>), and every significant decision was simultaneously ingested into the system's own RAG store with <code>source = user-memory</code>, <code>tags = [release-notes, build-log]</code>.</p>
+<p>We present two case studies executed concurrently on the same ARS instance, demonstrating both <strong>domain-research</strong> and <strong>infrastructure-research</strong> modes.</p>
+<h3 id="5a-case-study-1-self-hosted-engineering-of-ars-itself-program-b">5A. Case Study 1 — Self-Hosted Engineering of ARS Itself (Program B)</h3>
+<p>A 24-hour development sprint produced 14 release versions (v0.1.0 → v0.14.1) of the ARS infrastructure. Each release was committed across two GitHub repositories (<code>quetta-agents-mcp</code>, <code>quetta-agents</code>), and every significant decision was simultaneously ingested into the system's own RAG store with <code>source = user-memory</code>, <code>tags = [release-notes, build-log]</code>.</p>
 <table>
 <thead>
 <tr>
@@ -3796,7 +3796,7 @@ file_analysis → medical → code → multi_agent → question
 <tr>
 <th>Feature</th>
 <th>Vanilla Claude Code</th>
-<th>QARS-augmented Claude Code</th>
+<th>ARS-augmented Claude Code</th>
 </tr>
 </thead>
 <tbody>
@@ -3865,7 +3865,7 @@ file_analysis → medical → code → multi_agent → question
 </ul>
 <hr />
 <h2 id="8-conclusion">8. Conclusion</h2>
-<p>QARS demonstrates that autonomous research can be made practical by colocating LLM routing, GPU access, RAG memory, and access control behind a single MCP server. The system has supported four parallel research initiatives across thousands of MCG recordings while preserving session continuity across multiple Claude Code accounts and operating systems. We release the entire stack — MCP server, gateway, install scripts (Mac, Linux, Windows), and operational documentation — under an open-source license at the URLs below, with the explicit goal of letting other research groups bootstrap an equivalent environment in a single afternoon.</p>
+<p>ARS demonstrates that autonomous research can be made practical by colocating LLM routing, GPU access, RAG memory, and access control behind a single MCP server. The system has supported four parallel research initiatives across thousands of MCG recordings while preserving session continuity across multiple Claude Code accounts and operating systems. We release the entire stack — MCP server, gateway, install scripts (Mac, Linux, Windows), and operational documentation — under an open-source license at the URLs below, with the explicit goal of letting other research groups bootstrap an equivalent environment in a single afternoon.</p>
 <hr />
 <h2 id="references-repository-map">References &amp; Repository Map</h2>
 <table>
