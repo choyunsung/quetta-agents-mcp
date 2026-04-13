@@ -67,6 +67,9 @@ RAG_URL          = os.getenv("QUETTA_RAG_URL",    "http://localhost:8400")   # R
 TUSD_TOKEN       = os.getenv("QUETTA_TUSD_TOKEN", "")                        # X-API-Token for tusd
 RAG_KEY          = os.getenv("QUETTA_RAG_KEY",    "rag-claude-key-2026")     # X-API-Key for RAG
 
+# 분석 리포트 저장 위치 (서버 /storage 하위)
+ANALYZED_DIR     = os.getenv("QUETTA_ANALYZED_DIR", "/storage/uploads/analyzed")
+
 # 원격 에이전트 (릴레이 방식 — 에이전트가 게이트웨이에 역방향 WebSocket 연결)
 # QUETTA_REMOTE_AGENT_ID: 연결된 에이전트 ID (quetta_remote_connect 로 확인)
 REMOTE_AGENT_ID = os.getenv("QUETTA_REMOTE_AGENT_ID", "")
@@ -693,6 +696,24 @@ def _chunk_markdown(md: str, chunk_size: int = 3000, overlap: int = 200) -> list
         if buf.strip():
             chunks.append(buf)
     return [c for c in chunks if c.strip()]
+
+
+def _save_to_storage(file_id: str, suffix: str, content: str) -> str | None:
+    """분석 산출물을 /storage/uploads/analyzed/{file_id}.{suffix} 에 저장.
+    서버(게이트웨이 호스트)에서만 쓸 수 있는 로컬 경로이며, 볼륨 미연결 시 조용히 skip.
+    """
+    if not content:
+        return None
+    try:
+        import os as _os
+        _os.makedirs(ANALYZED_DIR, exist_ok=True)
+        path = _os.path.join(ANALYZED_DIR, f"{file_id}.{suffix}")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return path
+    except Exception as e:
+        logger.debug(f"_save_to_storage skipped: {e}")
+        return None
 
 
 async def _rag_ingest(text: str, source: str, metadata: dict) -> str | None:
@@ -1647,12 +1668,17 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "분석할 파일 경로 (서버 로컬 경로)",
+                        "description": "분석할 파일의 **클라이언트 PC 로컬 경로** (MCP가 자동 읽기 → TUS 업로드)",
+                        "default": "",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "파일 URL (http/https). MCP가 다운로드 → TUS 업로드",
                         "default": "",
                     },
                     "content": {
                         "type": "string",
-                        "description": "분석할 텍스트 내용 (file_path 미지정 시)",
+                        "description": "분석할 텍스트 내용 (file_path/url 미지정 시)",
                         "default": "",
                     },
                     "filename": {
@@ -2239,7 +2265,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             except Exception as e:
                 synthesis = f"_(Claude 종합 실패: {e})_"
 
-        # 5) RAG 인제스트 (분석 결과를 지식베이스에 저장)
+        # 5a) /storage/uploads/analyzed/ 에 리포트 파일 저장 (서버 로컬 백업)
+        storage_paths = []
+        for suffix, content in (("nougat.mmd", nougat_md), ("gemini.md", gemini_out), ("synthesis.md", synthesis)):
+            p = _save_to_storage(file_id, suffix, content)
+            if p: storage_paths.append(p)
+        if storage_paths:
+            progress.append(f"💾 /storage 저장: {len(storage_paths)}개 파일")
+
+        # 5b) RAG 인제스트 (분석 결과를 지식베이스에 저장)
         ingest_summary = ""
         if arguments.get("ingest_to_rag", True):
             try:
@@ -2361,6 +2395,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             synthesis = await _claude_synthesize_blueprint(vision_out, extracted_text, dtype, query)
         except Exception as e:
             synthesis = f"_(Claude 종합 실패: {e})_"
+
+        # 4b) /storage/uploads/analyzed/ 저장 (서버 로컬 백업)
+        if file_id:
+            for suffix, content in (
+                ("extracted.txt", extracted_text),
+                ("gemini.md", vision_out),
+                ("synthesis.md", synthesis),
+            ):
+                _save_to_storage(file_id, suffix, content)
 
         # 5) RAG 인제스트
         ingest_summary = ""
@@ -3094,27 +3137,45 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     # ── quetta_analyze_file ───────────────────────────────────────────────────
     elif name == "quetta_analyze_file":
         file_path_str = arguments.get("file_path", "").strip()
+        url_str       = arguments.get("url", "").strip()
         content_str   = arguments.get("content", "")
         filename      = arguments.get("filename", "upload.txt")
         query         = arguments.get("query", "")
         source        = arguments.get("source", "")
         tags          = arguments.get("tags", [])
 
-        # 1. 파일 읽기
+        progress: list[str] = []
+
+        # 1. 파일 준비 (로컬 PC → TUS, 또는 URL 다운로드, 또는 인라인 텍스트)
         if file_path_str:
             import pathlib
-            p = pathlib.Path(file_path_str)
+            p = pathlib.Path(file_path_str).expanduser()
             if not p.exists():
-                return [TextContent(type="text", text=f"파일을 찾을 수 없습니다: `{file_path_str}`")]
+                return [TextContent(type="text", text=f"파일을 찾을 수 없습니다: `{file_path_str}` (클라이언트 PC의 로컬 경로로 지정하세요)")]
             raw = p.read_bytes()
             filename = p.name
+            progress.append(f"📁 로컬 PC 파일 로드: `{filename}` ({len(raw):,} bytes)")
+        elif url_str:
+            # 서버가 URL에서 직접 다운로드 불가 — 클라이언트(MCP)가 받아서 TUS로 올림
+            async with httpx.AsyncClient(timeout=300, follow_redirects=True) as c:
+                dl = await c.get(url_str)
+                dl.raise_for_status()
+                raw = dl.content
+            # URL에서 파일명 추출
+            from urllib.parse import urlparse, unquote
+            fname_from_url = unquote(urlparse(url_str).path.rsplit("/", 1)[-1]) or "downloaded.bin"
+            filename = arguments.get("filename") or fname_from_url
+            progress.append(f"🌐 URL 다운로드: `{filename}` ({len(raw):,} bytes)")
         elif content_str:
             raw = content_str.encode("utf-8")
+            progress.append(f"📝 인라인 텍스트: {len(raw):,} bytes")
         else:
-            return [TextContent(type="text", text="`file_path` 또는 `content`를 지정하세요.")]
+            return [TextContent(type="text", text="`file_path` (로컬 PC), `url`, 또는 `content` 중 하나는 필수입니다.")]
 
-        # 2. TUS 업로드
+        # 2. TUS 업로드 (대용량 재개 가능)
+        progress.append(f"⬆️ TUS 업로드 중...")
         file_id = await _tus_upload(filename, raw)
+        progress.append(f"✅ 업로드 완료 — file_id: `{file_id}`")
 
         # 3. RAG 분석 엔드포인트 호출 (유형 감지 + 인제스트)
         analyze_body = {
@@ -3185,13 +3246,18 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         ai_data = await gateway_chat(ai_messages, model=model_map[file_type])
         ai_text = format_response(ai_data)
 
+        # 분석 리포트를 /storage/uploads/analyzed/ 에 보관
+        report_path = _save_to_storage(file_id, "analysis.md",
+            f"# {filename}\n\n**유형**: {label} ({type_reason})\n\n{ai_text}")
+
         lines = [
             f"## 파일 분석 결과: `{filename}`",
             "",
             f"| 항목 | 값 |",
             f"|------|-----|",
             f"| 파일 유형 | **{label}** ({type_reason}) |",
-            f"| 저장 위치 | `{storage_path}` |",
+            f"| 원본 저장 | `{storage_path}` |",
+            f"| 분석 리포트 | `{report_path or '(저장 안됨)'}` |",
             f"| 파일 ID | `{file_id}` |",
             f"| RAG 인제스트 | {chunks_n}청크 완료 |",
             f"| 크기 | {len(raw):,} bytes |",
