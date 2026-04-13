@@ -28,6 +28,14 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
+# Windows cp949 콘솔에서 이모지/한글 출력 시 UnicodeEncodeError 방지
+# (Python 3.7+ — reconfigure 미지원 환경은 silent skip)
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # ── 설정 ────────────────────────────────────────────────────────────────────
 
 AGENT_WS_URL = os.getenv("AGENT_WS_URL", "")
