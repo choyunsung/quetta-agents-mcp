@@ -394,16 +394,16 @@ async def _run_nougat_on_agent(agent_id: str, pdf_url: str, pdf_token: str = "")
     if data.get("returncode") != 0:
         raise RuntimeError(f"PDF 다운로드 실패: {data.get('stderr','')[:300]}")
 
-    # 3) nougat 실행 (D 드라이브 venv)
+    # 3) nougat 실행 (D 드라이브 venv, NOUGAT_CHECKPOINT 환경변수 사용자 등록됨)
     if is_windows:
-        venv_py = r"D:\quetta-nougat\venv\Scripts\python.exe"
+        nougat_exe = r"D:\quetta-nougat\venv\Scripts\nougat.exe"
         run = (
             f'powershell -Command "$d=Join-Path $env:TEMP \'quetta_paper\'; cd $d; '
-            f'& \'{venv_py}\' -m nougat \'$d\\input\\paper.pdf\' -o \'$d\\output\' --no-skipping 2>&1 | Select-Object -Last 30; '
+            f'$env:NOUGAT_CHECKPOINT=\'D:\\quetta-nougat\\nougat-checkpoint\'; '
+            f'& \'{nougat_exe}\' \'$d\\input\\paper.pdf\' -o \'$d\\output\' --no-skipping 2>&1 | Select-Object -Last 5; '
             f'Write-Host \'---\'; '
-            f'Get-ChildItem $d\\output | Select-Object Name; Write-Host \'---\'; '
-            f'Get-Content $d\\output\\paper.mmd -EA SilentlyContinue; '
-            f'if (-not (Test-Path $d\\output\\paper.mmd)) {{ Get-ChildItem $d\\output\\*.mmd | ForEach-Object {{ Get-Content $_ }} }}"'
+            f'Get-ChildItem $d\\output -Filter *.mmd | Select-Object Name; Write-Host \'---\'; '
+            f'Get-ChildItem $d\\output -Filter *.mmd | ForEach-Object {{ Get-Content $_.FullName }}"'
         )
     else:
         run = (
