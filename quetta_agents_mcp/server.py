@@ -372,15 +372,21 @@ async def _run_nougat_on_agent(agent_id: str, pdf_url: str, pdf_token: str = "")
     is_windows = "Windows" in (h.get("data", {}).get("stdout", "") or "")
 
     # 2) 작업 디렉토리 + PDF 다운로드
-    tok_hdr = f'-H "X-API-Token: {pdf_token}"' if pdf_token else ""
     if is_windows:
-        # Windows
+        # Windows PowerShell — curl.exe 인자 배열로 전달 (헤더 이스케이프 안전)
+        # PowerShell 변수($t)에 토큰 저장 후 -H 에 전달해야 shell이 쪼개지 않음
+        header_part = (
+            f"$t='X-API-Token: {pdf_token}'; " if pdf_token else ""
+        )
+        header_arg = "'-H', $t, " if pdf_token else ""
         setup = (
             f'powershell -Command "$d=Join-Path $env:TEMP \'quetta_paper\'; '
             f'Remove-Item -Recurse -Force $d -EA SilentlyContinue; '
             f'New-Item -ItemType Directory -Force $d\\input,$d\\output | Out-Null; '
-            f'curl.exe -fsSL {tok_hdr} \\"{pdf_url}\\" -o $d\\input\\paper.pdf; '
-            f'Get-Item $d\\input\\paper.pdf | Select-Object FullName,Length"'
+            f"{header_part}"
+            f"$out = Join-Path $d 'input\\paper.pdf'; "
+            f"& curl.exe @('-fsSL', {header_arg}'{pdf_url}', '-o', $out); "
+            f'Get-Item $out | Select-Object FullName,Length"'
         )
     else:
         setup = (
