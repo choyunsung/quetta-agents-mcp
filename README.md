@@ -33,20 +33,34 @@ Quetta MCP는 아무나 설치할 수 없습니다. **관리자가 공유한 Gis
 
 ### 사전 준비 (최초 1회)
 
+**Mac:**
 ```bash
-# Mac
 brew install gh uv
+```
 
-# Linux
+**Linux:**
+```bash
 sudo apt install -y curl python3
 curl -LsSf https://astral.sh/uv/install.sh | sh     # uv 설치
 # gh는 https://cli.github.com/ 참고
+```
+
+**Windows (PowerShell):**
+```powershell
+# winget 사용 (Win 10/11 기본 탑재)
+winget install --id astral-sh.uv
+winget install --id GitHub.cli
+# Claude Code: https://claude.ai/download 에서 설치
+
+# PowerShell 실행 정책이 막혀있으면 현재 사용자에 한해 허용:
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
 ```
 
 ### 방식 A: GitHub Secret Gist (권장) ⭐
 
 관리자가 Gist URL을 공유하면 팀원은 ID만 있으면 됩니다.
 
+**Mac / Linux:**
 ```bash
 # 1) GitHub 인증 (최초 1회)
 gh auth login
@@ -54,51 +68,89 @@ gh auth login
 # 2) 설치 (Gist ID만 입력)
 QUETTA_GIST_ID="관리자가_준_GIST_ID" \
 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+```
 
-# 3) Claude Code 재시작
+**Windows (PowerShell):**
+```powershell
+# 1) GitHub 인증 (최초 1회)
+gh auth login
+
+# 2) 설치
+$env:QUETTA_GIST_ID="관리자가_준_GIST_ID"
+iwr -useb https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.ps1 | iex
 ```
 
 **또는 PAT(Personal Access Token) 사용:**
 ```bash
-GH_TOKEN=ghp_xxx \
-QUETTA_GIST_ID="..." \
+# Mac/Linux
+GH_TOKEN=ghp_xxx QUETTA_GIST_ID="..." \
 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+```
+```powershell
+# Windows
+$env:GH_TOKEN="ghp_xxx"; $env:QUETTA_GIST_ID="..."
+iwr -useb https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.ps1 | iex
 ```
 
 ### 방식 B: Gateway 초대 토큰
 
 GitHub 계정이 없거나 Gateway에서 직접 토큰을 받은 경우.
 
+**Mac / Linux:**
 ```bash
 QUETTA_INSTALL_TOKEN="관리자가_준_토큰" \
 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:QUETTA_INSTALL_TOKEN="관리자가_준_토큰"
+iwr -useb https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.ps1 | iex
 ```
 
 ### 방식 C: 직접 API 키 (개발자/로컬)
 
 이미 API 키를 직접 받은 경우.
 
+**Mac / Linux:**
 ```bash
 QUETTA_API_KEY="본인_API_키" \
-QUETTA_GATEWAY_URL="https://rag.quetta-soft.com" \
 bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh)
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:QUETTA_API_KEY="본인_API_키"
+iwr -useb https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.ps1 | iex
 ```
 
 ### 대화형 설치
 
 환경변수를 비워두고 실행하면 프롬프트가 뜹니다:
 
+**Mac / Linux:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.sh | bash
 # → Gist ID (비우면 skip):
 # → 초대 토큰 (QUETTA_INSTALL_TOKEN):
 ```
 
+**Windows (PowerShell):**
+```powershell
+iwr -useb https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/install.ps1 | iex
+```
+
 ### 설치 확인
 
+**Mac / Linux:**
 ```bash
 claude mcp list | grep quetta
 # quetta-agents: uvx --from git+https://... quetta-agents-mcp - ✓ Connected
+```
+
+**Windows:**
+```powershell
+claude mcp list | Select-String quetta
 ```
 
 **설치 스크립트가 자동으로 처리:**
@@ -592,7 +644,13 @@ python3 scripts/build-docs-pdf.py
 
 ## 변경 이력
 
-### v0.13.1 (최신)
+### v0.13.2 (최신)
+- **Windows PowerShell 설치 스크립트** 추가 (`install.ps1`)
+  - `iwr -useb ... | iex` 한 줄 설치
+  - Mac/Linux install.sh 와 동일한 3가지 방식 지원 (Gist/토큰/API 키)
+  - Windows 환경 자동 감지 + uv/claude CLI 체크 + CLAUDE.md 주입
+
+### v0.13.1
 - **GitHub Secret Gist 기반 설치** 추가 — `QUETTA_GIST_ID` 환경변수로 Gist에서 설정 자동 로드
 - install.sh가 gh CLI 또는 GH_TOKEN으로 Gist 접근
 - 3가지 설치 방식 지원: Gist / Gateway 토큰 / 직접 API 키
