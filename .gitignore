@@ -7,3 +7,6 @@ __pycache__/
 # Python wheel/sdist 빌드 시 생성되는 파일만 무시
 dist/*.whl
 dist/*.tar.gz
+
+# graphify knowledge graph (로컬 빌드 산출물)
+graphify-out/
