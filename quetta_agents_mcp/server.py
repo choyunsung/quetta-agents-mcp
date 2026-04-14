@@ -1,17 +1,25 @@
 """
 Quetta Agents MCP Server
 
-Claude 채팅 중 자동으로 최적 모델을 선택해 질문을 처리합니다:
-- 의료 질문 → DeepSeek-R1 (임상/진단) 또는 Claude Opus (영상)
-- 코드 작업 → Gemma4 + agent-skills 자동 주입
-- 복잡한 멀티스텝 → SCION 병렬 멀티에이전트
-- 단순 질문 → Gemma4 (로컬·무료)
+▶ 기본 사용법: quetta_auto 하나로 모든 요청을 처리하세요.
+  요청을 자동 분석해 의도에 맞는 도구/모델/에이전트로 라우팅합니다.
+  개별 도구를 직접 선택할 필요가 없습니다.
+
+라우팅 규칙 (quetta_auto 내부):
+  - 의료 질문 → DeepSeek-R1 (임상/진단) 또는 Claude Opus (영상)
+  - 코드 작업 → Gemma4 + agent-skills 자동 주입
+  - 복잡한 멀티스텝 → SCION 병렬 멀티에이전트
+  - GPU 계산 (CUDA/학습/추론) → GPU 에이전트
+  - 원격 PC 제어 → 릴레이 에이전트
+  - 설계도/논문 분석 → Gemini + Nougat + Claude 파이프라인
+  - 단순 질문 → Gemma4 (로컬·무료)
 
 Tools:
-  quetta_ask              - 질문을 보내면 최적 모델이 자동으로 응답
-  quetta_code             - 코드 개발 작업 (agent-skills 5종 자동 주입)
-  quetta_medical          - 의료 전문 질의 (DeepSeek-R1 임상 추론)
-  quetta_multi_agent      - 복잡한 멀티스텝 태스크 (SCION 병렬 실행)
+  quetta_auto             - ★ 기본 진입점: 의도 자동 분류 → 최적 도구/모델로 라우팅
+  quetta_ask              - 질문을 보내면 최적 모델이 자동으로 응답 (quetta_auto가 내부 사용)
+  quetta_code             - 코드 개발 작업 (agent-skills 5종 자동 주입, quetta_auto가 내부 사용)
+  quetta_medical          - 의료 전문 질의 (DeepSeek-R1 임상 추론, quetta_auto가 내부 사용)
+  quetta_multi_agent      - 복잡한 멀티스텝 태스크 (SCION 병렬 실행, quetta_auto가 내부 사용)
   quetta_routing_info     - 요청이 어떤 모델로 라우팅될지 설명
   quetta_list_agents      - 등록된 전문 에이전트 목록
   quetta_run_agent        - 특정 에이전트에게 태스크 위임
@@ -52,7 +60,7 @@ from mcp.types import (
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
-VERSION          = "0.14.1"
+VERSION          = "0.14.2"
 REPO_SSH         = "git+ssh://git@github.com/choyunsung/quetta-agents-mcp"
 REPO_HTTPS       = "git+https://github.com/choyunsung/quetta-agents-mcp"
 
@@ -898,6 +906,55 @@ _INTENT_RULES = {
 }
 
 
+_QUETTA_AUTO_TOOL = Tool(
+    name="quetta_auto",
+    description=(
+        "★ **Quetta 기본 진입점** — 어떤 요청이든 이 도구 하나로 처리하세요.\n\n"
+        "요청 내용을 자동 분석해 최적 도구/모델/에이전트로 라우팅합니다.\n"
+        "quetta_ask, quetta_code, quetta_medical 등 개별 도구를 직접 선택할 필요 없습니다.\n\n"
+        "자동 라우팅 규칙:\n"
+        "  • 기억 저장 ('기억해줘', 'remember this') → quetta_memory_save\n"
+        "  • 기억 검색 ('뭐였지', '저번에') → quetta_memory_recall\n"
+        "  • 설계도/도면 분석 → quetta_analyze_blueprint\n"
+        "  • 논문 분석 (arxiv, .pdf, 수식) → quetta_analyze_paper\n"
+        "  • GPU 계산 (cuda/torch/학습/추론) → quetta_gpu_exec\n"
+        "  • 화면 캡처 → quetta_remote_screenshot\n"
+        "  • 원격 셸 명령 → quetta_remote_shell\n"
+        "  • 파일/문서 분석 → quetta_analyze_file\n"
+        "  • 의료 질의 (진단/임상/환자) → quetta_medical (DeepSeek-R1)\n"
+        "  • 코드 작업 (구현/리팩토링/버그) → quetta_code (Gemma4 + agent-skills)\n"
+        "  • 아키텍처/복잡한 설계 → quetta_multi_agent (SCION 병렬)\n"
+        "  • 그 외 일반 질문 → quetta_ask (Gemma4/Claude 자동 라우팅)\n\n"
+        "dry_run=true로 실행 전 라우팅 결과만 미리 확인 가능."
+    ),
+    inputSchema={
+        "type": "object",
+        "properties": {
+            "request": {
+                "type": "string",
+                "description": "자연어 요청 (한글/영문 자유). 원격 실행할 명령어는 백틱으로 감쌀 수 있음.",
+            },
+            "agent_id": {
+                "type": "string",
+                "description": "(선택) 원격 에이전트 ID — GPU/remote 의도로 분류될 때 자동 전달",
+                "default": "",
+            },
+            "file_path": {
+                "type": "string",
+                "description": "(선택) 파일 분석 의도일 때의 파일 경로",
+                "default": "",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": "true면 실행하지 않고 의도 분류·라우팅 결과만 반환",
+                "default": False,
+            },
+        },
+        "required": ["request"],
+    },
+)
+
+
 def _classify_intent(text: str) -> tuple[str, list[str]]:
     """사용자 요청을 분류. 반환: (best_intent, matched_keywords).
 
@@ -993,17 +1050,17 @@ def _get_latest_remote_version() -> str:
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     return [
+        _QUETTA_AUTO_TOOL,
         Tool(
             name="quetta_ask",
             description=(
-                "질문이나 작업을 Quetta 시스템에 보냅니다. "
+                "일반 질문·작업을 Quetta LLM 게이트웨이로 전송합니다. "
                 "내용을 자동 분석해 최적 모델로 라우팅합니다:\n"
-                "- 의료 질문 → DeepSeek-R1 (임상/진단) / Claude Opus (영상)\n"
-                "- 코드 작업 → Gemma4 + agent-skills 자동 주입\n"
-                "- 복잡한 분석 → Claude Sonnet\n"
-                "- 단순 질문 → Gemma4 (로컬·무료)\n\n"
-                "언제 사용?: Claude가 직접 답하기보다 로컬 모델에 위임하고 싶을 때, "
-                "또는 의료·코드·복잡한 작업을 전문 모델로 처리하고 싶을 때."
+                "- 단순 질문 → Gemma4 (로컬·무료)\n"
+                "- 복잡한 분석 → Claude Sonnet\n\n"
+                "⚠ 일반적으로 quetta_auto가 이 도구를 자동으로 호출합니다.\n"
+                "의료·코드·파일 분석 등 특수 의도는 quetta_auto가 더 적합한 도구를 선택합니다.\n"
+                "모델을 직접 지정하거나 시스템 프롬프트를 커스텀할 때만 이 도구를 직접 사용하세요."
             ),
             inputSchema={
                 "type": "object",
@@ -1032,8 +1089,8 @@ async def list_tools() -> list[Tool]:
                 "코드 개발 작업 전문 도구. "
                 "agent-skills 5종(plan/build/test/code-review/security)을 자동 주입하고 "
                 "복잡도에 따라 Gemma4 또는 Claude로 라우팅합니다.\n\n"
-                "언제 사용?: 함수/클래스 구현, 버그 수정, 리팩토링, 테스트 작성, "
-                "코드 리뷰, 보안 점검 등 코드 관련 모든 작업."
+                "⚠ quetta_auto가 코드 의도를 감지하면 자동으로 이 도구를 호출합니다.\n"
+                "language나 context를 명시적으로 지정할 때만 직접 사용하세요."
             ),
             inputSchema={
                 "type": "object",
@@ -1064,7 +1121,8 @@ async def list_tools() -> list[Tool]:
                 "- diagnostic: 증상 분석, 검사 결과 해석\n"
                 "- imaging: 방사선/MRI/CT 영상 분석 (Claude Opus 사용)\n"
                 "- research: 문헌 검토, 근거 기반 의학\n\n"
-                "언제 사용?: 의료·임상·약학 관련 질문, 진단 추론, 의학 연구."
+                "⚠ quetta_auto가 의료 의도를 감지하면 자동으로 이 도구를 호출합니다.\n"
+                "domain을 명시적으로 지정할 때만 직접 사용하세요."
             ),
             inputSchema={
                 "type": "object",
@@ -1088,8 +1146,8 @@ async def list_tools() -> list[Tool]:
             description=(
                 "복잡한 멀티스텝 태스크를 SCION 병렬 멀티에이전트로 실행합니다.\n"
                 "Gemma4 3개를 병렬로 실행(분석/구현/리뷰)한 후 Claude가 결과를 종합합니다.\n\n"
-                "언제 사용?: '조사 후 구현', '비교 분석 후 추천', "
-                "여러 관점이 필요한 복잡한 작업."
+                "⚠ quetta_auto가 '아키텍처', '설계', '복잡한' 등의 의도를 감지하면 자동으로 이 도구를 호출합니다.\n"
+                "여러 관점이 필요한 복잡한 작업에서 quetta_auto를 통해 자동 선택됩니다."
             ),
             inputSchema={
                 "type": "object",
@@ -1606,47 +1664,7 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
-        Tool(
-            name="quetta_auto",
-            description=(
-                "**스마트 디스패처** — 사용자의 요청을 분석해 자동으로 적절한 도구/모델/에이전트로 라우팅합니다.\n\n"
-                "어떤 요청이든 이 도구에 넘기면 MCP가 자동 판단합니다:\n"
-                "  • GPU 계산 (CUDA/torch/학습/추론) → GPU 에이전트에서 실행\n"
-                "  • 화면 캡처 요청 → quetta_remote_screenshot\n"
-                "  • 원격 셸 명령 → quetta_remote_shell (GPU 키워드면 GPU 에이전트)\n"
-                "  • 파일/문서 분석 → quetta_analyze_file\n"
-                "  • 의료 질의 → DeepSeek-R1 임상 추론\n"
-                "  • 코드 작업 → Gemma4 + agent-skills\n"
-                "  • 아키텍처/복잡한 설계 → 멀티에이전트 (SCION)\n"
-                "  • 그 외 일반 질문 → Gemma4/Claude 자동 라우팅\n\n"
-                "불확실할 때의 기본 동작: LLM 게이트웨이의 자동 라우팅(`quetta_ask`)."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "request": {
-                        "type": "string",
-                        "description": "자연어 요청 (한글/영문 자유). 원격 실행할 명령어를 백틱에 감쌀 수 있음.",
-                    },
-                    "agent_id": {
-                        "type": "string",
-                        "description": "(선택) 원격 에이전트 ID - GPU/remote 의도로 분류될 때 사용",
-                        "default": "",
-                    },
-                    "file_path": {
-                        "type": "string",
-                        "description": "(선택) 파일 분석 의도일 때의 파일 경로",
-                        "default": "",
-                    },
-                    "dry_run": {
-                        "type": "boolean",
-                        "description": "true면 실행하지 않고 분류 결과·라우팅만 반환",
-                        "default": False,
-                    },
-                },
-                "required": ["request"],
-            },
-        ),
+        _QUETTA_AUTO_TOOL,
         Tool(
             name="quetta_analyze_file",
             description=(
