@@ -70,6 +70,10 @@ fi
 #  2. QUETTA_GIST_ID  (secret Gist에서 JSON 받아오기 — 권장)
 #  3. QUETTA_INSTALL_TOKEN (Gateway /install/config 조회)
 #  4. 둘 다 없으면 Gist ID 입력 프롬프트
+#
+# 반환 JSON은 두 가지 섹션을 가질 수 있음:
+#  - 최상위 키 (gateway_url, api_key, rag_url …) → Quetta MCP 자체 설정
+#  - companion_mcps : {name: {command, args, env}} → 보조 MCP 일괄 등록
 
 load_from_gist() {
     local gist_id="$1"
@@ -108,6 +112,7 @@ if [ -z "$API_KEY" ] && [ -z "$GIST_ID" ] && [ -z "$INSTALL_TOKEN" ] \
 fi
 
 # 방법 A: Gist에서 config 로드
+CONFIG_JSON=""
 if [ -n "$GIST_ID" ] && [ -z "$API_KEY" ]; then
     info "GitHub Gist에서 설정 불러오는 중 ($GIST_ID)..."
     CONFIG_JSON=$(load_from_gist "$GIST_ID")
@@ -254,6 +259,62 @@ with open(settings, "w") as f:
 PYEOF
     success "settings.json updated"
     REGISTERED="settings-json"
+fi
+
+# ── 4.4. Companion MCPs 자동 등록 (사용자별 키 포함) ──────────────────────────
+# CONFIG_JSON에 companion_mcps 블록이 있으면 각 MCP를 claude mcp add-json으로 일괄 등록.
+# 스킵: QUETTA_SKIP_COMPANION=1
+
+if [ "${QUETTA_SKIP_COMPANION:-0}" != "1" ] && [ -n "$CONFIG_JSON" ]; then
+    # companion_mcps에서 (name, JSON) 튜플을 탭 구분으로 뽑는다
+    COMPANION_TSV=$(python3 - "$CONFIG_JSON" <<'PYEOF' 2>/dev/null || true
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(0)
+for name, cfg in (d.get("companion_mcps") or {}).items():
+    if not isinstance(cfg, dict) or "command" not in cfg:
+        continue
+    # args/env 기본값 보정
+    cfg.setdefault("args", [])
+    cfg.setdefault("env", {})
+    print(name + "\t" + json.dumps(cfg, ensure_ascii=False))
+PYEOF
+)
+
+    if [ -n "$COMPANION_TSV" ]; then
+        info "Companion MCP 등록 중..."
+        OK=0; FAIL=0
+        while IFS=$'\t' read -r NAME JSON; do
+            [ -z "$NAME" ] && continue
+
+            # 기존 등록 제거 (env 갱신 목적 · 멱등)
+            if command -v claude &>/dev/null; then
+                claude mcp remove "$NAME" --scope user &>/dev/null || true
+                if claude mcp add-json "$NAME" "$JSON" --scope user &>/dev/null; then
+                    success "  $NAME 등록됨"
+                    OK=$((OK+1))
+                    continue
+                fi
+            fi
+
+            # Fallback: settings.json 직접 편집
+            python3 - "$SETTINGS" "$NAME" "$JSON" <<'PYEOF' && { success "  $NAME 등록됨 (settings.json)"; OK=$((OK+1)); } || { warn "  $NAME 등록 실패"; FAIL=$((FAIL+1)); }
+import json, sys
+path, name, cfg_json = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f:
+    cfg = json.load(f)
+cfg.setdefault("mcpServers", {})[name] = json.loads(cfg_json)
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+PYEOF
+        done <<< "$COMPANION_TSV"
+
+        success "Companion MCP: $OK 등록, $FAIL 실패"
+    fi
+else
+    [ "${QUETTA_SKIP_COMPANION:-0}" = "1" ] && info "Companion MCP 설치 스킵 (QUETTA_SKIP_COMPANION=1)"
 fi
 
 # ── 4.5. CLAUDE.md 자동 세션 초기화 지시 추가 ─────────────────────────────────

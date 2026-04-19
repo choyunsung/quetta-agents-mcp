@@ -32,7 +32,29 @@ cat > quetta-install-config.json <<EOF
   "tusd_url": "https://rag.quetta-soft.com",
   "tusd_token": "YOUR_TUSD_TOKEN",
   "rag_key": "rag-claude-key-2026",
-  "timeout": "300"
+  "timeout": "300",
+
+  "_companion_mcps_note": "선택: 설치 시 Claude Code에 함께 등록할 보조 MCP (github, postgres 등). 사용자별 키를 여기에 넣으면 자동 주입됩니다.",
+  "companion_mcps": {
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": { "MEMORY_FILE_PATH": "~/.claude/memory-graph.json" }
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@tokenizin/mcp-npx-fetch"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "gho_..." }
+    }
+  }
 }
 EOF
 
@@ -69,11 +91,28 @@ bash <(curl -fsSL https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp
 **install.sh 동작:**
 1. Gateway `GET /install/config?token=<토큰>` 호출
 2. 토큰이 유효하면 설정값(API 키, URL 등) 수신
-3. `claude mcp add-json` 으로 Claude Code에 등록
-4. `~/.claude/CLAUDE.md` 에 세션 자동 초기화 지시 추가
-5. **끝** — 사용자는 API 키를 직접 볼 필요도, 관리할 필요도 없음
+3. `claude mcp add-json` 으로 Claude Code에 **Quetta MCP** 등록
+4. **Companion MCP 일괄 등록** — 응답 내 `companion_mcps` 를 iterate 하여 github / memory / sequential-thinking 등 보조 MCP를 사용자별 키와 함께 자동 등록
+5. `~/.claude/CLAUDE.md` 에 세션 자동 초기화 지시 추가
+6. **끝** — 사용자는 API 키를 직접 볼 필요도, 관리할 필요도 없음
 
 토큰 미지정 시 대화형 입력 프롬프트가 나옵니다.
+
+### Companion MCP 관리
+
+Gateway 호스트에서 `/data/quetta-agents/configs/companion_mcps.json` 을 편집하여 배포할 보조 MCP 목록을 관리합니다 (`companion_mcps.example.json` 참조).
+
+```bash
+# Gateway 서버에서
+cp /data/quetta-agents/configs/companion_mcps.example.json \
+   /data/quetta-agents/configs/companion_mcps.json
+# 실제 키 입력 후
+systemctl --user restart quetta-agents.service   # 또는 gateway만 재시작
+```
+
+- 스킵: 설치 시 `QUETTA_SKIP_COMPANION=1` 환경변수 지정
+- 멱등: 기존 등록이 있으면 제거 후 재등록 (env 갱신 목적)
+- Gist 방식에서도 동일 — Gist JSON 최상위에 `companion_mcps` 필드만 추가하면 됨
 
 ## 관리자 흐름 (토큰 발급)
 
