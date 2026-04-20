@@ -163,6 +163,50 @@ def format_response(data: dict) -> str:
     return text
 
 
+# ─── Agents Header (주요 툴 응답 상단에 연결 에이전트 요약 prepend) ────────────
+# 5초 캐시로 연속 호출시 /agent/agents 호출 최소화.
+_AGENTS_CACHE: dict = {"at": 0.0, "data": []}
+
+
+async def _agents_cached(ttl: float = 5.0) -> list:
+    import time as _t
+    now = _t.time()
+    if now - _AGENTS_CACHE["at"] < ttl and _AGENTS_CACHE["data"]:
+        return _AGENTS_CACHE["data"]
+    try:
+        _AGENTS_CACHE["data"] = await _gw_get("/agent/agents") or []
+        _AGENTS_CACHE["at"] = now
+    except Exception:
+        pass
+    return _AGENTS_CACHE["data"]
+
+
+def _fmt_gpu(gpu: str) -> str:
+    if not gpu or gpu in ("없음", "None"):
+        return "CPU"
+    if "Apple Silicon" in gpu:
+        return "Metal"
+    return gpu.replace("NVIDIA GeForce ", "").replace("NVIDIA ", "")[:24]
+
+
+async def _agents_header() -> str:
+    """연결된 원격 에이전트 한 줄 요약. 실패 시 빈 문자열."""
+    try:
+        agents = await _agents_cached()
+    except Exception:
+        return ""
+    if not agents:
+        return "🔌 _Agents: 연결 없음_\n\n"
+    parts = []
+    for a in agents:
+        host = (a.get("hostname") or "?").split(".")[0]
+        aid  = a.get("id", "?")[:6]
+        gpu  = _fmt_gpu(a.get("gpu") or "")
+        mark = "⚠" if a.get("outdated") else "✓"
+        parts.append(f"{mark} {host} ({aid}, {gpu})")
+    return "🖥 _Agents [" + str(len(agents)) + "]: " + " · ".join(parts) + "_\n\n"
+
+
 # ─── Relay Helpers ────────────────────────────────────────────────────────────
 
 async def _relay(agent_id: str, cmd_type: str, payload: dict = {}, timeout: float = 120) -> dict:
@@ -1094,7 +1138,8 @@ async def call_tool(name: str, arguments: dict) -> list:
             "file_id":  file_id,
             "dry_run":  dry_run,
         })
-        return [TextContent(type="text", text=data.get("text", str(data)))]
+        header = await _agents_header()
+        return [TextContent(type="text", text=header + data.get("text", str(data)))]
 
     # ── quetta_ask ────────────────────────────────────────────────────────────
     elif name == "quetta_ask":
@@ -1103,7 +1148,8 @@ async def call_tool(name: str, arguments: dict) -> list:
             messages.append({"role": "system", "content": arguments["system_prompt"]})
         messages.append({"role": "user", "content": arguments["query"]})
         data = await gateway_chat(messages, model=arguments.get("model", "auto"))
-        return [TextContent(type="text", text=format_response(data))]
+        header = await _agents_header()
+        return [TextContent(type="text", text=header + format_response(data))]
 
     # ── quetta_code ───────────────────────────────────────────────────────────
     elif name == "quetta_code":
@@ -1115,7 +1161,8 @@ async def call_tool(name: str, arguments: dict) -> list:
         skills = ["plan", "build", "test", "code-review-and-quality", "security-and-hardening"]
         data = await gateway_chat([{"role": "user", "content": content}], model="auto",
                                   inject_skills=skills)
-        return [TextContent(type="text", text=format_response(data))]
+        header = await _agents_header()
+        return [TextContent(type="text", text=header + format_response(data))]
 
     # ── quetta_medical ────────────────────────────────────────────────────────
     elif name == "quetta_medical":
@@ -1129,7 +1176,8 @@ async def call_tool(name: str, arguments: dict) -> list:
         else:
             model, msgs = "medical", [{"role": "user", "content": arguments["query"]}]
         data = await gateway_chat(msgs, model=model)
-        return [TextContent(type="text", text=format_response(data))]
+        header = await _agents_header()
+        return [TextContent(type="text", text=header + format_response(data))]
 
     # ── quetta_multi_agent ────────────────────────────────────────────────────
     elif name == "quetta_multi_agent":
@@ -1138,7 +1186,8 @@ async def call_tool(name: str, arguments: dict) -> list:
         if not data.get("routing", {}).get("multi_agent"):
             msgs = [{"role": "user", "content": f"[멀티에이전트 병렬 실행 요청]\n\n{arguments['task']}"}]
             data = await gateway_chat(msgs, model="auto")
-        return [TextContent(type="text", text=format_response(data))]
+        header = await _agents_header()
+        return [TextContent(type="text", text=header + format_response(data))]
 
     # ── quetta_routing_info ───────────────────────────────────────────────────
     elif name == "quetta_routing_info":
@@ -1161,11 +1210,12 @@ async def call_tool(name: str, arguments: dict) -> list:
 
     # ── quetta_list_agents ────────────────────────────────────────────────────
     elif name == "quetta_list_agents":
+        header = await _agents_header()
         data = await orch_get("/agents")
         agents = data if isinstance(data, list) else data.get("agents", data.get("items", []))
         if not agents:
-            return [TextContent(type="text", text="등록된 에이전트가 없습니다.")]
-        lines = ["**등록된 Quetta 에이전트**\n"]
+            return [TextContent(type="text", text=header + "등록된 전문 에이전트가 없습니다.")]
+        lines = [header + "**등록된 Quetta 전문 에이전트**\n"]
         for ag in agents:
             lines.append(f"### {ag.get('name','?')}")
             lines.append(f"- 유형: `{ag.get('harness_type','?')}`  |  모델: `{ag.get('model_override') or 'auto'}`")
