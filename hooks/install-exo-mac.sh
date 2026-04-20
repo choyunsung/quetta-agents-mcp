@@ -24,13 +24,31 @@ for arg in "$@"; do
   esac
 done
 
-# ── 1. Python 3.10+ 확인 ────────────────────────────────────────────────────
-info "Python 3.10+ 확인..."
-if ! command -v python3 >/dev/null 2>&1; then
-  die "python3 가 없습니다. Homebrew: brew install python@3.12"
+# ── 1. Python 3.13+ 필수 (exo-explore 요구사항) ─────────────────────────────
+# 설치된 Python 들 중 3.13 이상 찾고, 없으면 brew 로 python@3.13 설치.
+PY=""
+for c in python3.13 python3.14 python3; do
+  if command -v "$c" >/dev/null 2>&1; then
+    v=$("$c" -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+    if [ "$(printf '%s\n3.13' "$v" | sort -V | head -1)" = "3.13" ]; then
+      PY="$(command -v "$c")"
+      break
+    fi
+  fi
+done
+
+if [ -z "$PY" ]; then
+  info "Python 3.13+ 미설치 — Homebrew 로 자동 설치"
+  if ! command -v brew >/dev/null 2>&1; then
+    die "brew 가 없습니다. https://brew.sh 에서 Homebrew 설치 후 재시도하세요."
+  fi
+  brew install python@3.13
+  PY="$(brew --prefix)/opt/python@3.13/bin/python3.13"
+  [ -x "$PY" ] || PY="$(command -v python3.13 || true)"
+  [ -z "$PY" ] && die "python@3.13 설치 직후 바이너리 탐색 실패"
 fi
-PYVER=$(python3 -c 'import sys;print(".".join(map(str,sys.version_info[:2])))')
-ok "python3 $PYVER"
+PYVER=$("$PY" -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+ok "python $PYVER ($PY)"
 
 # ── 2. Exo 설치 — exo-explore/exo (분산 LLM 추론). PyPI 의 동명 패키지와 구분 ──
 # 기존에 PyPI `exo` (JSON 도구, by Prashant Kumar Kuntala) 가 잘못 깔린 경우 식별 후 제거.
@@ -51,11 +69,12 @@ fi
 
 if [ "$EXO_GOOD" = 0 ]; then
   info "exo-explore/exo 설치 중 (PyTorch 등 포함, 수분 소요 가능)..."
+  # exo-explore 는 Python 3.13+ 필수 → $PY 명시 사용
   if command -v pipx >/dev/null 2>&1; then
-    pipx install "$EXO_REPO"
+    pipx install --python "$PY" "$EXO_REPO"
   else
-    info "pipx 미설치 — python3 -m pip install --user 사용"
-    python3 -m pip install --user --upgrade "$EXO_REPO"
+    info "pipx 미설치 — $PY -m pip install --user 사용"
+    "$PY" -m pip install --user --upgrade "$EXO_REPO"
     export PATH="$HOME/.local/bin:$HOME/Library/Python/$PYVER/bin:$PATH"
   fi
   command -v exo >/dev/null 2>&1 || die "Exo 설치 실패. https://github.com/exo-explore/exo 수동 설치 참고."
