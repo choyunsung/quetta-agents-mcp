@@ -341,7 +341,8 @@ _QUETTA_AUTO_TOOL = Tool(
         "  • 기억 저장 ('기억해줘', 'remember this') → quetta_memory_save\n"
         "  • 기억 검색 ('뭐였지', '저번에') → quetta_memory_recall\n"
         "  • 설계도/도면 분석 → quetta_analyze_blueprint\n"
-        "  • 논문 분석 (arxiv, .pdf, 수식) → quetta_analyze_paper\n"
+        "  • 논문 검색 (PubMed/arXiv/Semantic Scholar) → quetta_paper_search\n"
+        "  • 논문 분석 (.pdf, 수식) → quetta_analyze_paper\n"
         "  • GPU 계산 (cuda/torch/학습/추론) → quetta_gpu_exec\n"
         "  • 화면 캡처 → quetta_remote_screenshot\n"
         "  • 원격 셸 명령 → quetta_remote_shell\n"
@@ -681,6 +682,33 @@ async def list_tools() -> list[Tool]:
                     "top_k":        {"type": "integer", "default": 8},
                     "list":         {"type": "boolean", "default": False},
                 },
+            },
+        ),
+        Tool(
+            name="quetta_paper_search",
+            description=(
+                "**학술 논문 통합 검색** (PubMed + arXiv + Semantic Scholar).\n"
+                "자연어 쿼리 하나로 3개 DB 병렬 조회, 중복 제거, 도메인별 가중 재랭킹.\n\n"
+                "도메인 자동 감지:\n"
+                "  • 의료/임상 → PubMed + Semantic Scholar 가중\n"
+                "  • ML/물리/수학 → arXiv + Semantic Scholar 가중\n"
+                "  • 일반 → 3개 DB 모두 병렬\n\n"
+                "응답: 제목·저자·연도·인용수·OA PDF 링크·DOI/PMID/arXiv ID.\n"
+                "후속: `quetta_analyze_paper` 에 PDF URL 또는 file_id 전달해 전문 분석 가능."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query":            {"type": "string"},
+                    "limit":            {"type": "integer", "default": 15},
+                    "sources":          {"type": "array", "items": {"type": "string",
+                                         "enum": ["auto", "pubmed", "arxiv", "semantic_scholar"]},
+                                         "default": ["auto"]},
+                    "year_from":        {"type": "integer"},
+                    "year_to":          {"type": "integer"},
+                    "open_access_only": {"type": "boolean", "default": False},
+                },
+                "required": ["query"],
             },
         ),
         Tool(
@@ -1297,6 +1325,19 @@ async def call_tool(name: str, arguments: dict) -> list:
             "ingest_to_rag": arguments.get("ingest_to_rag", True),
             "tags":         arguments.get("tags", []),
         }, timeout=1800)
+        return [TextContent(type="text", text=data.get("text", str(data)))]
+
+    # ── quetta_paper_search ───────────────────────────────────────────────────
+    elif name == "quetta_paper_search":
+        payload = {
+            "query":            arguments["query"],
+            "limit":            arguments.get("limit", 15),
+            "sources":          arguments.get("sources", ["auto"]),
+            "open_access_only": arguments.get("open_access_only", False),
+        }
+        if arguments.get("year_from"): payload["year_from"] = arguments["year_from"]
+        if arguments.get("year_to"):   payload["year_to"]   = arguments["year_to"]
+        data = await _gw_post("/v1/papers/search", payload, timeout=60)
         return [TextContent(type="text", text=data.get("text", str(data)))]
 
     # ── quetta_blueprint_query ────────────────────────────────────────────────
