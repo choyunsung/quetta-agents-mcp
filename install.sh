@@ -371,7 +371,14 @@ cat >> "$CLAUDE_MD" <<'QUETTA_MD'
 `quetta_auto` 는 위 Quetta 범위 안에서 의도가 애매할 때만 사용 — Claude Code 네이티브로 처리 가능하면 그쪽 먼저 시도.
 
 ### 세션 시작
-새 세션 첫 응답 전 `quetta_session_init()` 1회 호출 → 사용자 프로필·최근 맥락을 배경 지식으로 반영.
+새 세션 첫 응답 전 **두 가지를 순서대로** 호출:
+1. `quetta_session_init()` — 사용자 프로필·최근 맥락
+2. `quetta_session_list(project_key="<git:orgrepo#branch>", within_hours=48)` — 최근 48시간 내 같은 프로젝트의 다른 기기 세션이 있으면 사용자에게 "어제 OOO PC 에서 하던 작업을 이어받을까요?" 확인 후 `quetta_session_resume(session_id=...)` 호출. 반환 요약 + 원본 + diff 를 배경 지식으로 반영.
+
+### 멀티 세션 이어받기 / 요약 검증
+- 실시간 **PostToolUse hook** 이 자동으로 `/v1/sessions/push` 호출 → MongoDB 저장 (설치 시 자동 등록됨, debounce 3s, TTL 30일)
+- 세션 종료 전 중요한 맥락은 `quetta_session_summarize(session_id=..., summary_md="...")` 로 요약 업로드 — **서버가 원본 대비 핵심 항목 커버리지를 점수화** 하고, 누락 항목이 많으면 경고. 요약이 부실해도 원본은 그대로 보존되어 **유실 방지**.
+- 영구 보존 필요 세션은 `quetta_session_pin(session_id=..., pinned=True)`.
 
 ### 하네스 동작 범위 (참고)
 - `quetta_ask/code/medical/auto` 호출 시 Gateway가 **원격 LLM 프롬프트**에만 공유 메모리를 자동 주입
@@ -395,6 +402,67 @@ Quetta 라우팅 결과만 미리 보려면 `quetta_auto(..., dry_run=True)`.
 QUETTA_MD
 
 success "CLAUDE.md 자동 초기화 지시 추가 ($CLAUDE_MD)"
+
+# ── 4.6. PostToolUse hook 자동 등록 (멀티 세션 실시간 push) ─────────────────────
+HOOK_DIR="$HOME/.claude/hooks"
+HOOK_SH="$HOOK_DIR/quetta-session-push.sh"
+mkdir -p "$HOOK_DIR"
+
+# GitHub 에서 최신 훅 스크립트 다운로드 (repo raw URL)
+info "PostToolUse hook 배포 중..."
+HOOK_RAW="https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/hooks/quetta-session-push.sh"
+if curl -fsSL "$HOOK_RAW" -o "$HOOK_SH" 2>/dev/null; then
+    chmod +x "$HOOK_SH"
+    success "hook 스크립트: $HOOK_SH"
+else
+    warn "hook 스크립트 다운로드 실패 — 네트워크 확인 후 수동 복사 필요"
+fi
+
+# settings.json 에 hook 항목 등록 (PostToolUse + Stop)
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+if [ -f "$HOOK_SH" ]; then
+    python3 - "$CLAUDE_SETTINGS" "$HOOK_SH" "$GATEWAY_URL" "$API_KEY" <<'PYEOF'
+import json, os, sys, pathlib
+settings_path, hook_sh, gw, key = sys.argv[1:5]
+p = pathlib.Path(settings_path)
+if p.exists():
+    try:
+        cfg = json.loads(p.read_text() or "{}")
+    except Exception:
+        cfg = {}
+else:
+    cfg = {}
+
+hooks_cfg = cfg.setdefault("hooks", {})
+
+# PostToolUse 와 Stop 두 이벤트 모두 등록 (중복 방지)
+for event in ("PostToolUse", "Stop"):
+    existing = hooks_cfg.get(event, []) or []
+    # 이미 동일 경로 등록돼 있으면 스킵
+    already = any(
+        any(h.get("command") == hook_sh for h in (entry.get("hooks") or []))
+        for entry in existing if isinstance(entry, dict)
+    )
+    if already:
+        continue
+    existing.append({
+        "hooks": [{
+            "type": "command",
+            "command": hook_sh,
+            "env": {
+                "QUETTA_GATEWAY_URL": gw,
+                "QUETTA_API_KEY":     key,
+            },
+        }]
+    })
+    hooks_cfg[event] = existing
+
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+print("hooks registered")
+PYEOF
+    success "settings.json 에 PostToolUse/Stop hook 등록 완료"
+fi
 
 # ── 5. Done ──────────────────────────────────────────────────────────────────
 echo ""

@@ -47,6 +47,12 @@ Tools:
   quetta_history_list     - 대화 히스토리 목록
   quetta_history_get      - 특정 세션 이력 조회
   quetta_history_stats    - 히스토리 통계
+  quetta_session_list     - 멀티 세션 목록 (기기 간 이어받기용)
+  quetta_session_resume   - 다른 세션/기기 작업 이어받기
+  quetta_session_summarize- 세션 요약 업로드 + 서버 검증
+  quetta_session_tag      - 세션 태그 부여
+  quetta_session_pin      - TTL 면제 핀 고정
+  quetta_session_delete   - 세션 즉시 삭제
   quetta_gpu_exec         - GPU 에이전트에서 명령 실행
   quetta_gpu_python       - GPU 에이전트에서 Python 코드 실행
   quetta_gpu_status       - GPU 에이전트 상태 조회
@@ -920,6 +926,91 @@ async def list_tools() -> list[Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
+            name="quetta_session_list",
+            description=(
+                "**내 모든 멀티 세션 목록** (본인 API 키 기준, 기기 무관).\n"
+                "project_key·machine_id·tag·within_hours 필터 + pinned 필터 지원.\n"
+                "'어제 다른 PC 에서 하던 작업' 찾을 때 사용."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_key":  {"type": "string", "default": ""},
+                    "machine_id":   {"type": "string", "default": ""},
+                    "tag":          {"type": "string", "default": ""},
+                    "pinned":       {"type": "boolean"},
+                    "within_hours": {"type": "integer"},
+                    "limit":        {"type": "integer", "default": 30},
+                },
+            },
+        ),
+        Tool(
+            name="quetta_session_resume",
+            description=(
+                "**다른 세션/기기 작업 이어받기** — 지정 세션의 요약·원본 최근 N턴·미커밋 diff·"
+                "열린 파일 + 요약 커버리지 검증 지표를 한꺼번에 반환.\n"
+                "커버리지 낮으면 경고와 누락 항목이 text 에 포함됨 → recent_messages 원본 참고."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "max_turns":  {"type": "integer", "default": 30},
+                },
+                "required": ["session_id"],
+            },
+        ),
+        Tool(
+            name="quetta_session_summarize",
+            description=(
+                "**세션 요약 업로드 + 서버 검증**. Claude 가 현재 세션 맥락을 스스로 요약해 "
+                "올리면, 서버가 원본 메시지에서 핵심 항목(파일 경로·git SHA·포트·URL·PR 번호)을 "
+                "추출해 요약의 커버리지를 점수화한다. 원본은 TTL 만료 전까지 그대로 보존돼 유실 방지."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id":       {"type": "string"},
+                    "summary_md":       {"type": "string"},
+                    "claims_complete":  {"type": "boolean", "default": False},
+                },
+                "required": ["session_id", "summary_md"],
+            },
+        ),
+        Tool(
+            name="quetta_session_tag",
+            description="세션에 사람이 읽기 쉬운 태그 부여 (예: 'API 라우터 리팩토링').",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "tag":        {"type": "string"},
+                },
+                "required": ["session_id", "tag"],
+            },
+        ),
+        Tool(
+            name="quetta_session_pin",
+            description="세션 핀 고정/해제. 핀된 세션은 TTL 자동 삭제에서 제외됨.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "pinned":     {"type": "boolean", "default": True},
+                },
+                "required": ["session_id"],
+            },
+        ),
+        Tool(
+            name="quetta_session_delete",
+            description="세션을 즉시 삭제 (원본 messages 포함 완전 제거).",
+            inputSchema={
+                "type": "object",
+                "properties": {"session_id": {"type": "string"}},
+                "required": ["session_id"],
+            },
+        ),
+        Tool(
             name="quetta_version",
             description="현재 설치된 quetta-agents-mcp 버전과 GitHub 최신 커밋을 확인합니다.",
             inputSchema={"type": "object", "properties": {}},
@@ -1549,6 +1640,84 @@ async def call_tool(name: str, arguments: dict) -> list:
         for bk, cnt in (d.get("by_backend") or {}).items():
             lines.append(f"- {bk}: {cnt:,}")
         return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── 멀티 세션 이어받기 ─────────────────────────────────────────────────────
+    elif name == "quetta_session_list":
+        params: dict = {"limit": arguments.get("limit", 30)}
+        for k in ("project_key", "machine_id", "tag"):
+            if arguments.get(k):
+                params[k] = arguments[k]
+        if "pinned" in arguments:
+            params["pinned"] = str(arguments["pinned"]).lower()
+        if arguments.get("within_hours"):
+            params["within_hours"] = arguments["within_hours"]
+        sessions = await _gw_get("/v1/sessions/list", params)
+        if not sessions:
+            return [TextContent(type="text", text="저장된 세션이 없습니다.")]
+        import datetime
+        lines = [f"## 🗂 내 멀티 세션 ({len(sessions)}개)\n"]
+        for s in sessions:
+            ts = datetime.datetime.fromtimestamp(s.get("updated_at", 0)).strftime("%Y-%m-%d %H:%M")
+            pin = " 📌" if s.get("pinned") else ""
+            tag = f"  `{s['tag']}`" if s.get("tag") else ""
+            lines.append(
+                f"- `{s['session_id'][:12]}…`{pin}{tag}\n"
+                f"  - 프로젝트: `{s.get('project_key','')}`\n"
+                f"  - 기기: `{s.get('machine_id','')}`  · cwd: `{s.get('cwd','')[-60:]}`\n"
+                f"  - 메시지 {s.get('message_count',0)}개 · 갱신 {ts}"
+            )
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "quetta_session_resume":
+        data = await _gw_get(
+            f"/v1/sessions/resume/{arguments['session_id']}",
+            {"max_turns": arguments.get("max_turns", 30)},
+        )
+        return [TextContent(type="text", text=data.get("text", str(data)))]
+
+    elif name == "quetta_session_summarize":
+        data = await _gw_post("/v1/sessions/summarize", {
+            "session_id":       arguments["session_id"],
+            "summary_md":       arguments["summary_md"],
+            "claims_complete":  arguments.get("claims_complete", False),
+        })
+        score = data.get("completeness_score", 1.0)
+        mark = "⚠️" if data.get("warning") else "✅"
+        lines = [
+            f"## {mark} 세션 요약 저장 (`{arguments['session_id']}`)",
+            f"- 커버리지: {score*100:.0f}% ({data.get('covered',0)}/{data.get('checked',0)} 핵심 항목)",
+        ]
+        miss = data.get("missing_sample", {})
+        if miss:
+            lines.append("- 요약에 없는 항목(샘플):")
+            for cat, items in miss.items():
+                if items:
+                    lines.append(f"  - **{cat}**: {', '.join(items)}")
+        lines.append("\n_원본은 그대로 보존됨 — 필요 시 `quetta_session_resume` 로 조회 가능_")
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    elif name == "quetta_session_tag":
+        data = await _gw_post("/v1/sessions/tag", {
+            "session_id": arguments["session_id"],
+            "tag":        arguments["tag"],
+        })
+        return [TextContent(type="text", text=f"✅ 태그 설정: `{data['session_id']}` → **{data['tag']}**")]
+
+    elif name == "quetta_session_pin":
+        data = await _gw_post("/v1/sessions/pin", {
+            "session_id": arguments["session_id"],
+            "pinned":     arguments.get("pinned", True),
+        })
+        state = "📌 핀 고정" if data.get("pinned") else "해제됨"
+        return [TextContent(type="text", text=f"{state}: `{data['session_id']}`")]
+
+    elif name == "quetta_session_delete":
+        sid = arguments["session_id"]
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.delete(f"{GATEWAY_URL}/v1/sessions/{sid}", headers=_auth_headers())
+            r.raise_for_status()
+            data = r.json()
+        return [TextContent(type="text", text=f"🗑 세션 삭제: `{sid}` ({data.get('deleted',0)}건)")]
 
     # ── quetta_version ────────────────────────────────────────────────────────
     elif name == "quetta_version":

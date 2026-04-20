@@ -247,7 +247,14 @@ $block = @'
 `quetta_auto` 는 위 Quetta 범위 안에서 의도가 애매할 때만 사용 — Claude Code 네이티브로 처리 가능하면 그쪽 먼저 시도.
 
 ### 세션 시작
-새 세션 첫 응답 전 `quetta_session_init()` 1회 호출 → 사용자 프로필·최근 맥락을 배경 지식으로 반영.
+새 세션 첫 응답 전 **두 가지를 순서대로** 호출:
+1. `quetta_session_init()` — 사용자 프로필·최근 맥락
+2. `quetta_session_list(project_key="<git:orgrepo#branch>", within_hours=48)` — 같은 프로젝트의 최근 세션이 있으면 사용자에게 "어제 다른 기기에서 하던 작업을 이어받을까요?" 확인 후 `quetta_session_resume(session_id=...)` 호출.
+
+### 멀티 세션 이어받기 / 요약 검증
+- 실시간 PostToolUse hook 이 자동으로 세션 JSONL을 `/v1/sessions/push` 로 업로드 (debounce 3s, TTL 30일)
+- 세션 마무리 시 `quetta_session_summarize(session_id=..., summary_md="...")` — 서버가 원본 대비 핵심 항목 커버리지 점수화. 요약이 부실해도 원본 보존 → 유실 방지.
+- 영구 보존은 `quetta_session_pin(session_id=..., pinned=True)`.
 
 ### 하네스 동작 범위 (참고)
 - `quetta_ask/code/medical/auto` 호출 시 Gateway가 **원격 LLM 프롬프트**에만 공유 메모리를 자동 주입
@@ -271,6 +278,65 @@ Quetta 라우팅 결과만 미리 보려면 `quetta_auto(..., dry_run=True)`.
 '@
 Add-Content -Path $ClaudeMd -Value $block -Encoding UTF8
 Success "CLAUDE.md 자동 초기화 지시 추가 ($ClaudeMd)"
+
+# ── 5.5. PostToolUse hook 자동 등록 (멀티 세션 실시간 push) ────────────────────
+$HookDir  = Join-Path $env:USERPROFILE ".claude\hooks"
+$HookPs1  = Join-Path $HookDir "quetta-session-push.ps1"
+if (-not (Test-Path $HookDir)) { New-Item -ItemType Directory -Force -Path $HookDir | Out-Null }
+
+Info "PostToolUse hook 배포 중..."
+$HookRaw = "https://raw.githubusercontent.com/choyunsung/quetta-agents-mcp/master/hooks/quetta-session-push.ps1"
+try {
+    Invoke-WebRequest -Uri $HookRaw -OutFile $HookPs1 -UseBasicParsing
+    Success "hook 스크립트: $HookPs1"
+} catch {
+    Warn "hook 스크립트 다운로드 실패 ($_) — 수동 복사 필요"
+}
+
+$SettingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
+if (Test-Path $HookPs1) {
+    try {
+        if (Test-Path $SettingsPath) {
+            $cfg = Get-Content $SettingsPath -Raw | ConvertFrom-Json -AsHashtable
+        } else {
+            $cfg = @{}
+        }
+        if (-not $cfg.ContainsKey("hooks")) { $cfg["hooks"] = @{} }
+
+        $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HookPs1`""
+
+        foreach ($event in @("PostToolUse", "Stop")) {
+            $existing = @()
+            if ($cfg["hooks"].ContainsKey($event)) { $existing = @($cfg["hooks"][$event]) }
+            $already = $false
+            foreach ($entry in $existing) {
+                if ($entry.hooks) {
+                    foreach ($h in $entry.hooks) {
+                        if ($h.command -eq $cmd) { $already = $true }
+                    }
+                }
+            }
+            if (-not $already) {
+                $existing += @{
+                    hooks = @(@{
+                        type    = "command"
+                        command = $cmd
+                        env     = @{
+                            QUETTA_GATEWAY_URL = $GatewayUrl
+                            QUETTA_API_KEY     = $ApiKey
+                        }
+                    })
+                }
+                $cfg["hooks"][$event] = $existing
+            }
+        }
+
+        $cfg | ConvertTo-Json -Depth 10 | Set-Content -Path $SettingsPath -Encoding UTF8
+        Success "settings.json 에 PostToolUse/Stop hook 등록 완료"
+    } catch {
+        Warn "settings.json 업데이트 실패: $_"
+    }
+}
 
 # ── 6. 완료 ──────────────────────────────────────────────────────────────────
 Write-Host ""
