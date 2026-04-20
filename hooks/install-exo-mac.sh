@@ -58,7 +58,7 @@ ok "rustc nightly 준비"
 
 if ! command -v macmon >/dev/null 2>&1; then
   info "macmon 설치 (cargo, 수분)"
-  cargo install --git https://github.com/vladkels/macmon \
+  cargo install --git https://github.com/vladkens/macmon \
       --rev a1cd06b6cc0d5e61db24fd8832e74cd992097a7d macmon --force
 fi
 ok "macmon 설치됨"
