@@ -81,9 +81,22 @@ if [ "$EXO_GOOD" = 0 ]; then
   fi
 
   info "exo-explore/exo 설치 중 (PyTorch 등 포함, 수분 소요 가능)..."
-  pipx install --python "$PY" --force "$EXO_REPO"
+  if ! pipx install --python "$PY" --force "$EXO_REPO" 2>&1 | tee /tmp/quetta-exo-install.log; then
+    warn "pipx 설치 실패 — exo-explore 는 현재 Rust PyO3 바인딩 전환 중이라 pip 설치가 불안정합니다."
+    warn "  MLX 는 별도로 이미 설치되어 단일 맥 추론은 가능합니다."
+    warn "  필요 시 공식 README 참고: https://github.com/exo-explore/exo"
+    warn "  상세 로그: /tmp/quetta-exo-install.log"
+    # LaunchAgent 가 이미 등록돼 있으면 실패 로그 방지용으로 언로드만
+    if [ -f "$HOME/Library/LaunchAgents/com.quetta.exo.plist" ]; then
+      launchctl unload "$HOME/Library/LaunchAgents/com.quetta.exo.plist" 2>/dev/null || true
+    fi
+    exit 0
+  fi
   export PATH="$HOME/.local/bin:$PATH"
-  command -v exo >/dev/null 2>&1 || die "Exo 설치 실패. https://github.com/exo-explore/exo 수동 설치 참고."
+  command -v exo >/dev/null 2>&1 || {
+    warn "exo 바이너리 미확인 — 설치 실패. 종료"
+    exit 0
+  }
   ok "Exo (exo-explore) 설치 완료: $(which exo)"
 fi
 
