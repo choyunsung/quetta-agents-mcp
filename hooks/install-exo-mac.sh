@@ -68,15 +68,21 @@ if command -v exo >/dev/null 2>&1; then
 fi
 
 if [ "$EXO_GOOD" = 0 ]; then
-  info "exo-explore/exo 설치 중 (PyTorch 등 포함, 수분 소요 가능)..."
-  # exo-explore 는 Python 3.13+ 필수 → $PY 명시 사용
-  if command -v pipx >/dev/null 2>&1; then
-    pipx install --python "$PY" "$EXO_REPO"
-  else
-    info "pipx 미설치 — $PY -m pip install --user 사용"
-    "$PY" -m pip install --user --upgrade "$EXO_REPO"
-    export PATH="$HOME/.local/bin:$HOME/Library/Python/$PYVER/bin:$PATH"
+  # Homebrew Python 은 PEP 668 로 pip --user 차단 → pipx 필수
+  if ! command -v pipx >/dev/null 2>&1; then
+    info "pipx 미설치 — Homebrew 로 자동 설치"
+    if command -v brew >/dev/null 2>&1; then
+      brew install pipx
+      pipx ensurepath >/dev/null 2>&1 || true
+      export PATH="$HOME/.local/bin:$(brew --prefix)/bin:$PATH"
+    else
+      die "brew 가 없습니다. 'brew install pipx' 또는 https://pypa.github.io/pipx/ 설치 후 재시도."
+    fi
   fi
+
+  info "exo-explore/exo 설치 중 (PyTorch 등 포함, 수분 소요 가능)..."
+  pipx install --python "$PY" --force "$EXO_REPO"
+  export PATH="$HOME/.local/bin:$PATH"
   command -v exo >/dev/null 2>&1 || die "Exo 설치 실패. https://github.com/exo-explore/exo 수동 설치 참고."
   ok "Exo (exo-explore) 설치 완료: $(which exo)"
 fi
