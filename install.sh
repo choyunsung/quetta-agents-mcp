@@ -337,19 +337,60 @@ fi
 cat >> "$CLAUDE_MD" <<'QUETTA_MD'
 
 <!-- quetta-agents-mcp:auto-init BEGIN -->
-## Quetta Agents MCP — 공유 메모리 자동 초기화
+## Quetta Agents MCP — 사용 규칙
 
-Quetta MCP가 활성화돼 있으면 **모든 새 Claude Code 세션 시작 직후**에 아래 도구를 **한 번** 호출하세요:
+### 역할 분리 (최우선 원칙)
+**Claude Code 네이티브 기능은 항상 그대로 유지하고 우선 사용한다**:
+- Agent / Task / Plan / Subagent 호출 (Explore, feature-dev, general-purpose 등)
+- Read / Write / Edit / Grep / Glob / Bash
+- 내장 skills: `/codex`, `/plan-ceo-review`, `/plan-eng-review`, `/autoplan`, `/review`, `/qa`, `/ship`, `/investigate` 등 — 코딩·설계·리뷰 어드바이저는 전부 Claude Code native 를 사용
 
-```
-quetta_session_init()
-```
+**Quetta MCP는 "로컬에서 불가능한 외부 리소스"가 필요할 때만 호출**한다:
+- 원격 Windows/맥 GPU 에이전트 실행
+- 공유 RAG 메모리 · 세션간 기억
+- 학술 DB 통합 검색 (PubMed/arXiv/Semantic Scholar)
+- Nougat + Gemini 기반 PDF 수식 OCR/분석
+- 다른 LLM 라우팅 (Gemma4 로컬, DeepSeek-R1 의료, Claude Opus 영상)
 
-반환된 사용자 메모리 / 최근 맥락 / 활성 문서를 현재 대화의 배경 지식으로 반영합니다. 사용자에게 별도 고지 없이 자연스럽게 진행합니다.
+일반 코딩·파일 편집·리팩토링·로컬 탐색은 Claude Code 네이티브가 처리한다. Quetta에 위임하지 않는다.
 
-- **중요한 신규 정보**(사용자 선호, 프로젝트 결정, 반복 참조될 사실)는 `quetta_memory_save(text=...)` 로 공유 메모리에 저장하세요. 이후 모든 Claude Code 계정에서 자동 참조됩니다.
-- 모든 `quetta_ask` / `quetta_auto` 호출은 Gateway RAG harness가 관련 메모리를 자동 주입하므로, 명시적 검색 없이도 컨텍스트가 연결됩니다.
-- 멀티 계정 전환 시에도 동일한 Quetta 서버를 사용하는 한 기억이 매끄럽게 이어집니다.
+### 진입점 선택
+| 상황 | 사용할 도구 |
+|------|-----------|
+| 파일 편집, 코드 리뷰, 로컬 Grep/Read, 디버깅 | **Claude Code native** (Agent, Edit, Bash, …) |
+| 아키텍처/계획 리뷰 | `/plan-ceo-review`, `/plan-eng-review`, `/autoplan` |
+| 독립 제2의견 | `/codex` |
+| "논문 검색해줘" (파일 없음) | `quetta_paper_search` |
+| PDF/file_id 첨부 후 분석 | `quetta_analyze_paper` (파일 제공 시 자동) |
+| 원격 GPU 필요 (CUDA/torch/학습) | `quetta_gpu_exec` |
+| 원격 PC 스크린샷/셸 | `quetta_remote_screenshot` / `quetta_remote_shell` |
+| 의료 임상/진단 질의 | `quetta_medical` (DeepSeek-R1) |
+| 공유 메모리 저장/회상 | `quetta_memory_save` / `quetta_memory_recall` |
+| 기타 외부 LLM 자유 질의 | `quetta_ask` |
+
+`quetta_auto` 는 위 Quetta 범위 안에서 의도가 애매할 때만 사용 — Claude Code 네이티브로 처리 가능하면 그쪽 먼저 시도.
+
+### 세션 시작
+새 세션 첫 응답 전 `quetta_session_init()` 1회 호출 → 사용자 프로필·최근 맥락을 배경 지식으로 반영.
+
+### 하네스 동작 범위 (참고)
+- `quetta_ask/code/medical/auto` 호출 시 Gateway가 **원격 LLM 프롬프트**에만 공유 메모리를 자동 주입
+- Claude Code 자체의 추론·도구 호출·Agent/Task 흐름엔 영향 없음
+- 별도 설정 불필요
+
+### 어드바이저 구분
+- **Claude Code native advisors** (`/codex`, `/plan-ceo-review`, `/review` 등) — 계획·리뷰·2차 의견은 모두 이쪽
+- **`quetta_code`** — 외부 LLM(Gemma4/Claude)에 코딩 작업을 맡길 때만 사용하며 agent-skills 5종 자동 주입. 일반 Claude Code 코딩 흐름엔 사용하지 않음.
+
+### 파일 유무 분기
+- 파일 없이 "논문 검색" → `quetta_paper_search` (PubMed+arXiv+Semantic Scholar)
+- `file_path`/`file_id` 제공 → `quetta_analyze_paper` 로 서버가 자동 override (Nougat+Gemini+Claude)
+
+### 메모리 저장 기준
+사용자 선호·프로젝트 결정·반복 참조될 사실만 `quetta_memory_save(text=..., tags=[...])`. 진행 중 대화 상태는 저장하지 않는다.
+
+### dry_run
+Quetta 라우팅 결과만 미리 보려면 `quetta_auto(..., dry_run=True)`.
 <!-- quetta-agents-mcp:auto-init END -->
 QUETTA_MD
 
