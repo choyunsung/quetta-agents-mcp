@@ -606,6 +606,47 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="quetta_agent_update",
+            description=(
+                "연결된 Remote Agent 원격 업데이트. agent_id 미지정이면 **모든** 에이전트.\n"
+                "각 에이전트가 /agent/script 에서 최신 코드를 받아 자기 자신 교체 후 재시작."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "agent_id": {"type": "string", "default": ""},
+                },
+            },
+        ),
+        Tool(
+            name="quetta_exo_status",
+            description=(
+                "**Exo 분산 클러스터 상태** — 연결된 Mac/iPhone/iPad 노드 토폴로지, "
+                "사용 가능한 모델, 부하를 확인. EXO_BASE_URL 서버 설정 필수."
+            ),
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="quetta_mlx_distribute",
+            description=(
+                "**MLX Distributed 분산 추론** — 연결된 Apple Silicon Remote Agent 중 "
+                "`mpirun` 가용한 노드들을 엮어 mlx_lm.generate 을 병렬 실행.\n"
+                "n_hosts=1 이면 단일 노드, 2 이상이면 hostfile 기반 분산."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "prompt":     {"type": "string"},
+                    "model":      {"type": "string",
+                                   "default": "mlx-community/Llama-3.2-3B-Instruct-4bit"},
+                    "n_hosts":    {"type": "integer", "default": 1},
+                    "agent_id":   {"type": "string", "default": ""},
+                    "max_tokens": {"type": "integer", "default": 512},
+                },
+                "required": ["prompt"],
+            },
+        ),
+        Tool(
             name="quetta_analyze_file",
             description=(
                 "로컬 파일을 서버에 업로드하고 AI로 분석합니다.\n"
@@ -1325,6 +1366,123 @@ async def call_tool(name: str, arguments: dict) -> list:
                 "```",
                 "",
             ]
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_agent_update ───────────────────────────────────────────────────
+    elif name == "quetta_agent_update":
+        aid = arguments.get("agent_id", "").strip()
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as c:
+            if aid:
+                r = await c.post(f"{GATEWAY_URL}/agent/{aid}/update", headers=_auth_headers())
+                r.raise_for_status()
+                d = r.json()
+                return [TextContent(type="text", text=(
+                    f"▶ 에이전트 `{aid}` 업데이트 요청됨\n"
+                    f"- 서버 버전: `{d.get('target_version','?')}`\n"
+                    f"- 이전 버전: `{d.get('from_version','?')}`\n\n"
+                    "에이전트가 1-2초 안에 재시작되며, 재연결되면 새 ID가 발급될 수 있습니다."
+                ))]
+            else:
+                r = await c.post(f"{GATEWAY_URL}/agent/update-all", headers=_auth_headers())
+                r.raise_for_status()
+                d = r.json()
+                lines = [
+                    f"## 🔄 전체 에이전트 업데이트 요청",
+                    f"- 목표 버전: `{d.get('target_version','?')}`",
+                    f"- 성공: **{len(d.get('sent', []))}** / 실패: **{len(d.get('failed', []))}**",
+                    "",
+                ]
+                for s in d.get("sent", []):
+                    lines.append(f"- ✓ `{s['id']}` · {s.get('hostname','?')} (`{s.get('from_version','?')}` → `{d.get('target_version','?')}`)")
+                for f in d.get("failed", []):
+                    lines.append(f"- ✗ `{f['id']}` — {f.get('error','?')}")
+                return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_exo_status ─────────────────────────────────────────────────────
+    elif name == "quetta_exo_status":
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.get(f"{GATEWAY_URL}/v1/exo/status", headers=_auth_headers())
+                if r.status_code == 404:
+                    # /v1/exo/status 없으면 gateway 내부 상태는 /v1/models 로 확인
+                    r2 = await c.get(f"{GATEWAY_URL}/v1/models", headers=_auth_headers())
+                    data = {"enabled": None, "fallback_models": r2.json() if r2.status_code==200 else {}}
+                else:
+                    r.raise_for_status()
+                    data = r.json()
+        except Exception as e:
+            return [TextContent(type="text", text=f"Exo 상태 조회 실패: {e}")]
+        if not data.get("enabled"):
+            return [TextContent(type="text", text=(
+                "## Exo 분산 클러스터\n\n"
+                "❌ 비활성화 상태.\n\n"
+                "서버 `.env` 에 다음을 추가 후 gateway 재시작:\n"
+                "```\n"
+                "EXO_ENABLED=true\n"
+                "EXO_BASE_URL=http://<master-mac>.local:52415\n"
+                "EXO_DEFAULT_MODEL=llama-3.1-70b\n"
+                "```\n"
+                "맥북 자동 설치: `curl -fsSL .../hooks/install-exo-mac.sh | bash`"
+            ))]
+        lines = ["## 🌐 Exo 분산 클러스터 상태", f"- URL: `{data.get('base_url','')}`"]
+        topo = data.get("topology") or {}
+        nodes = topo.get("nodes") or topo.get("peers") or []
+        if nodes:
+            lines += ["", "### 노드"]
+            for n in nodes:
+                lines.append(f"- `{n.get('id', n.get('name','?'))}`"
+                             + (f" · {n.get('device','')}" if n.get('device') else ""))
+        models = data.get("models") or []
+        if models:
+            lines += ["", "### 제공 모델", *[f"- `{m}`" for m in models[:20]]]
+        if data.get("error"):
+            lines += ["", f"⚠ 에러: `{data['error']}`"]
+        return [TextContent(type="text", text="\n".join(lines))]
+
+    # ── quetta_mlx_distribute ─────────────────────────────────────────────────
+    elif name == "quetta_mlx_distribute":
+        prompt     = arguments["prompt"]
+        model      = arguments.get("model", "mlx-community/Llama-3.2-3B-Instruct-4bit")
+        n_hosts    = max(1, int(arguments.get("n_hosts", 1)))
+        max_tokens = int(arguments.get("max_tokens", 512))
+        aid        = await _pick_agent(arguments, prefer_gpu=True)
+
+        # Apple Silicon 에이전트인지 확인 (gpu 필드에 'Apple' 또는 'Metal')
+        try:
+            agents_list = await _gw_get("/agent/agents")
+            ag = next((a for a in agents_list if a["id"] == aid), {})
+            gpu_field = (ag.get("gpu") or "").lower()
+            if not ("apple" in gpu_field or "metal" in gpu_field or "silicon" in gpu_field):
+                return [TextContent(type="text", text=(
+                    f"⚠ 에이전트 `{aid}` 는 Apple Silicon 이 아닙니다 (`{ag.get('gpu','?')}`). "
+                    "MLX Distributed 는 arm64 macOS 에서만 동작합니다."
+                ))]
+        except Exception:
+            pass
+
+        # mpirun 호출 조립
+        safe_prompt = prompt.replace('"', '\\"')
+        if n_hosts <= 1:
+            cmd = (
+                f'python3 -m mlx_lm.generate '
+                f'--model "{model}" --prompt "{safe_prompt}" --max-tokens {max_tokens}'
+            )
+        else:
+            cmd = (
+                f'mpirun --hostfile $HOME/.mlx-hosts -np {n_hosts} '
+                f'python3 -m mlx_lm.generate '
+                f'--model "{model}" --prompt "{safe_prompt}" --max-tokens {max_tokens}'
+            )
+        data = await _relay(aid, "shell", {"command": cmd, "timeout": 600}, timeout=610)
+        inner = data.get("data", data)
+        lines = [
+            f"**[MLX Distributed]** model=`{model}`  hosts={n_hosts}  agent=`{aid}`",
+            f"rc={inner.get('returncode',-1)}",
+        ]
+        if inner.get("stdout"): lines += ["```", inner["stdout"].strip()[-8000:], "```"]
+        if inner.get("stderr"): lines += ["_stderr:_", "```", inner["stderr"].strip()[-2000:], "```"]
         return [TextContent(type="text", text="\n".join(lines))]
 
     # ── quetta_analyze_file ───────────────────────────────────────────────────

@@ -380,6 +380,13 @@ cat >> "$CLAUDE_MD" <<'QUETTA_MD'
 - 세션 종료 전 중요한 맥락은 `quetta_session_summarize(session_id=..., summary_md="...")` 로 요약 업로드 — **서버가 원본 대비 핵심 항목 커버리지를 점수화** 하고, 누락 항목이 많으면 경고. 요약이 부실해도 원본은 그대로 보존되어 **유실 방지**.
 - 영구 보존 필요 세션은 `quetta_session_pin(session_id=..., pinned=True)`.
 
+### Apple Silicon 분산 추론 (Exo / MLX Distributed)
+- 초대형 모델 (Llama 3.1 **405B**, DeepSeek-R1 **671B**) 요청 시 자동으로 **Exo 분산 클러스터**로 라우팅 (EXO_ENABLED=true + EXO_BASE_URL 설정 서버에서)
+- Mac Remote Agent 설치 시 Exo + MLX Distributed 가 자동으로 함께 설치됨 (QUETTA_SKIP_MAC_EXTRA=1 로 비활성화 가능)
+- `quetta_exo_status` — 클러스터 노드·모델 목록 조회
+- `quetta_mlx_distribute(prompt, model, n_hosts)` — 연결된 맥 노드들을 `mpirun` 로 엮어 MLX 분산 추론 직접 실행
+- 라우팅 트리거 키워드: `405b`, `671b`, `exo`, `mac cluster`, `분산 추론`, `mlx`, `metal`
+
 ### 하네스 동작 범위 (참고)
 - `quetta_ask/code/medical/auto` 호출 시 Gateway가 **원격 LLM 프롬프트**에만 공유 메모리를 자동 주입
 - Claude Code 자체의 추론·도구 호출·Agent/Task 흐름엔 영향 없음

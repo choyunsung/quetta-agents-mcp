@@ -256,6 +256,12 @@ $block = @'
 - 세션 마무리 시 `quetta_session_summarize(session_id=..., summary_md="...")` — 서버가 원본 대비 핵심 항목 커버리지 점수화. 요약이 부실해도 원본 보존 → 유실 방지.
 - 영구 보존은 `quetta_session_pin(session_id=..., pinned=True)`.
 
+### Apple Silicon 분산 추론
+- Llama 3.1 405B / DeepSeek-R1 671B 같은 초대형 모델은 Exo 클러스터로 자동 라우팅 (서버 EXO_ENABLED=true)
+- `quetta_exo_status` — 클러스터 상태
+- `quetta_mlx_distribute` — mpirun 기반 MLX 분산 추론
+- 키워드: 405b / 671b / exo / mac cluster / 분산 추론 / mlx / metal
+
 ### 하네스 동작 범위 (참고)
 - `quetta_ask/code/medical/auto` 호출 시 Gateway가 **원격 LLM 프롬프트**에만 공유 메모리를 자동 주입
 - Claude Code 자체의 추론·도구 호출·Agent/Task 흐름엔 영향 없음
