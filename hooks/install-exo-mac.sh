@@ -37,14 +37,19 @@ ok "Xcode CLT: $(xcode-select -p)"
 # ── 2. Homebrew + uv + node ─────────────────────────────────────────────────
 command -v brew >/dev/null 2>&1 || die "Homebrew 필요: https://brew.sh"
 
-for pkg in uv node; do
+for pkg in uv node cmake; do
   if ! brew list --formula "$pkg" >/dev/null 2>&1; then
     info "brew install $pkg"
     brew install "$pkg"
   fi
 done
+# uv 는 exo-explore 의 최신 pyproject 필드 (extra-build-dependencies 등) 요구
+# → 이미 설치돼 있으면 최신으로 업그레이드 (구버전이면 TOML 파싱 실패)
+info "uv 최신화 (upgrade)"
+brew upgrade uv 2>/dev/null || true
 ok "uv $(uv --version 2>&1)"
 ok "node $(node --version 2>&1)"
+ok "cmake $(cmake --version 2>&1 | head -1)"
 
 # ── 3. Rust nightly + macmon ────────────────────────────────────────────────
 if ! command -v rustup >/dev/null 2>&1; then
