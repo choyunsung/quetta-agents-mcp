@@ -183,6 +183,8 @@ _GPU_KEYWORDS = (
     "ollama run", "llama.cpp", "onnxruntime-gpu", "mmdet", "yolov",
     "train.py", "inference.py", "finetune", "sd-webui", "comfyui",
     "whisper", "diffusers", "stable-diffusion",
+    # Apple Silicon / Metal / MLX
+    "mlx", "mlx-lm", "mlx.core", "metal", "coreml", "core ml",
 )
 
 

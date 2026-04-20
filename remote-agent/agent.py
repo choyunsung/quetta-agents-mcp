@@ -94,6 +94,7 @@ def _health(_p=None):
 
 
 def _detect_gpu() -> str:
+    # NVIDIA CUDA / AMD ROCm
     for cmd in (
         ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
         ["rocm-smi", "--showproductname"],
@@ -104,6 +105,28 @@ def _detect_gpu() -> str:
                 return r.stdout.strip().split("\n")[0]
         except Exception:
             pass
+
+    # Apple Silicon (macOS arm64 — M1/M2/M3/M4)
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        try:
+            r = subprocess.run(
+                ["system_profiler", "SPDisplaysDataType", "-json"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                import json as _json
+                data = _json.loads(r.stdout)
+                gpus = data.get("SPDisplaysDataType", [])
+                if gpus:
+                    name = (gpus[0].get("sppci_model")
+                            or gpus[0].get("_name")
+                            or "Apple Silicon GPU")
+                    cores = gpus[0].get("sppci_cores", "")
+                    return f"{name}" + (f" ({cores} cores)" if cores else "")
+        except Exception:
+            pass
+        return "Apple Silicon (Metal)"
+
     return "없음 (CPU only)"
 
 
