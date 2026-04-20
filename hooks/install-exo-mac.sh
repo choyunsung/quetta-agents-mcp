@@ -32,20 +32,34 @@ fi
 PYVER=$(python3 -c 'import sys;print(".".join(map(str,sys.version_info[:2])))')
 ok "python3 $PYVER"
 
-# ── 2. Exo 설치 (pipx 권장) ─────────────────────────────────────────────────
+# ── 2. Exo 설치 — exo-explore/exo (분산 LLM 추론). PyPI 의 동명 패키지와 구분 ──
+# 기존에 PyPI `exo` (JSON 도구, by Prashant Kumar Kuntala) 가 잘못 깔린 경우 식별 후 제거.
+EXO_REPO="git+https://github.com/exo-explore/exo.git"
+EXO_GOOD=0
 if command -v exo >/dev/null 2>&1; then
-  ok "Exo 이미 설치됨: $(which exo)"
-else
-  info "Exo 설치 중..."
-  if command -v pipx >/dev/null 2>&1; then
-    pipx install exo
+  # exo-explore 는 --help 출력에 "exo" 또는 "run a cluster" 문구 포함.
+  # 잘못된 PyPI exo 는 banner + "Version: 0.1.x" 만 나옴.
+  if exo --help 2>&1 | grep -qE "cluster|distributed|inference|partition"; then
+    EXO_GOOD=1
+    ok "Exo (exo-explore) 이미 설치됨: $(which exo)"
   else
-    warn "pipx 미설치 — pip --user 로 설치"
-    python3 -m pip install --user --upgrade exo
-    export PATH="$HOME/Library/Python/$PYVER/bin:$PATH"
+    warn "exo 바이너리 존재하나 exo-explore/exo 가 아닙니다 — 제거 후 재설치"
+    python3 -m pip uninstall -y exo 2>&1 | tail -2 || true
+    command -v pipx >/dev/null 2>&1 && pipx uninstall exo 2>/dev/null || true
+  fi
+fi
+
+if [ "$EXO_GOOD" = 0 ]; then
+  info "exo-explore/exo 설치 중 (PyTorch 등 포함, 수분 소요 가능)..."
+  if command -v pipx >/dev/null 2>&1; then
+    pipx install "$EXO_REPO"
+  else
+    info "pipx 미설치 — python3 -m pip install --user 사용"
+    python3 -m pip install --user --upgrade "$EXO_REPO"
+    export PATH="$HOME/.local/bin:$HOME/Library/Python/$PYVER/bin:$PATH"
   fi
   command -v exo >/dev/null 2>&1 || die "Exo 설치 실패. https://github.com/exo-explore/exo 수동 설치 참고."
-  ok "Exo 설치 완료"
+  ok "Exo (exo-explore) 설치 완료: $(which exo)"
 fi
 
 # ── 3. LaunchAgent 등록 (부팅 시 자동 실행) ─────────────────────────────────
