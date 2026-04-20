@@ -387,6 +387,39 @@ cat >> "$CLAUDE_MD" <<'QUETTA_MD'
 - `quetta_mlx_distribute(prompt, model, n_hosts)` — 연결된 맥 노드들을 `mpirun` 로 엮어 MLX 분산 추론 직접 실행
 - 라우팅 트리거 키워드: `405b`, `671b`, `exo`, `mac cluster`, `분산 추론`, `mlx`, `metal`
 
+### 원격 에이전트 활용 가이드 (Multi-PC)
+연결된 Remote Agent 들은 **이 PC의 Claude Code** 에서 자유롭게 사용 가능. 의도에 맞춰 자동/수동 선택:
+
+**먼저 한 번**: `quetta_remote_connect(action="list")` — 연결된 에이전트 목록 + 각자 GPU/플랫폼/host 확인.
+
+**자동 선택 (권장)**: 도구만 호출하면 적절한 에이전트가 선택됨.
+- `quetta_gpu_exec(command="...")` — GPU 키워드(cuda/torch/nvidia-smi/whisper/diffusion 등) 감지 시 NVIDIA GPU 있는 에이전트(예: Windows RTX) 자동 선택
+- `quetta_mlx_distribute(prompt=..., model=..., n_hosts=N)` — Apple Silicon 에이전트(Mac) 자동 선택, n_hosts≥2면 mpirun 자동 분산
+- `quetta_remote_screenshot()` / `quetta_remote_click(x,y)` / `quetta_remote_type(text)` — GUI 있는 에이전트
+- `quetta_remote_shell(command="...")` — 단일 에이전트 1대만 있으면 자동, 여러 대면 명시 필요
+
+**명시 선택**: agent_id 인자로 특정 에이전트 지정.
+```
+quetta_remote_shell(agent_id="<id>", command="...")
+quetta_gpu_exec(agent_id="<id>", command="python train.py")
+```
+
+**의도-에이전트 매핑 추천**:
+| 작업 | 도구 | 자동 라우팅 |
+|------|-----|-----------|
+| CUDA/PyTorch 학습·추론 | `quetta_gpu_exec` | NVIDIA GPU agent (Windows) |
+| Whisper / Stable Diffusion | `quetta_gpu_exec` | NVIDIA GPU agent |
+| Llama/Qwen 추론 (단일 Mac) | `quetta_mlx_distribute(n_hosts=1)` | Apple Silicon agent |
+| Llama 70B+ 멀티 Mac 분산 | `quetta_mlx_distribute(n_hosts=2~3)` | mpirun + ~/.mlx-hosts |
+| Nougat PDF OCR | `quetta_analyze_paper` | NVIDIA GPU agent (Windows D:\quetta-nougat) |
+| 화면 캡처 / GUI 자동화 | `quetta_remote_screenshot/click/type` | GUI 있는 agent |
+| nvidia-smi / GPU 상태 | `quetta_gpu_status` | 모든 GPU agent 순회 |
+| 임의의 shell 명령 | `quetta_remote_shell` | agent_id 명시 권장 |
+
+**연결 끊긴 에이전트**: `quetta_remote_connect(action="install-link", os="windows"|"linux"|"mac")` 로 새 설치 링크 발급 → `iex (irm https://rag.quetta-soft.com/agent/install/<UUID>)` (Windows) 또는 `curl ... | bash` (Mac/Linux).
+
+**원격 에이전트 일괄 업데이트**: `quetta_agent_update()` (전체) 또는 `quetta_agent_update(agent_id="<id>")`.
+
 ### 하네스 동작 범위 (참고)
 - `quetta_ask/code/medical/auto` 호출 시 Gateway가 **원격 LLM 프롬프트**에만 공유 메모리를 자동 주입
 - Claude Code 자체의 추론·도구 호출·Agent/Task 흐름엔 영향 없음

@@ -262,6 +262,21 @@ $block = @'
 - `quetta_mlx_distribute` — mpirun 기반 MLX 분산 추론
 - 키워드: 405b / 671b / exo / mac cluster / 분산 추론 / mlx / metal
 
+### 원격 에이전트 활용 (Multi-PC)
+연결된 Remote Agent 들은 이 PC 의 Claude Code 에서 사용 가능. 먼저 `quetta_remote_connect(action="list")` 로 연결 목록 확인 후:
+
+| 작업 | 도구 | 자동 라우팅 |
+|------|-----|-----------|
+| CUDA/PyTorch / Whisper / SD | `quetta_gpu_exec` | NVIDIA GPU agent (Windows) |
+| Llama 단일 Mac 추론 | `quetta_mlx_distribute(n_hosts=1)` | Apple Silicon agent |
+| Mac 분산 추론 | `quetta_mlx_distribute(n_hosts=2~3)` | mpirun + ~/.mlx-hosts |
+| Nougat PDF OCR | `quetta_analyze_paper` | NVIDIA GPU agent (Windows) |
+| 화면/입력 자동화 | `quetta_remote_screenshot/click/type` | GUI agent |
+| GPU 상태 조회 | `quetta_gpu_status` | 전체 GPU agent |
+| 임의 shell | `quetta_remote_shell` | agent_id 명시 권장 |
+
+특정 에이전트 강제: `quetta_remote_shell(agent_id="<id>", command="...")`. 연결 끊김 시 `quetta_remote_connect(action="install-link", os="windows"|"linux"|"mac")` 로 재설치 링크 발급. 일괄 업데이트는 `quetta_agent_update()`.
+
 ### 하네스 동작 범위 (참고)
 - `quetta_ask/code/medical/auto` 호출 시 Gateway가 **원격 LLM 프롬프트**에만 공유 메모리를 자동 주입
 - Claude Code 자체의 추론·도구 호출·Agent/Task 흐름엔 영향 없음
