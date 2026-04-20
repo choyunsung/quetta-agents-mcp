@@ -1463,16 +1463,27 @@ async def call_tool(name: str, arguments: dict) -> list:
             pass
 
         # mpirun 호출 조립
+        # macOS 에서 mlx-lm 은 보통 pipx venv (~/.local/pipx/venvs/mlx-lm/) 또는 brew Python venv 에 설치.
+        # Remote Agent shell 의 PATH 에는 venv 가 없으므로 venv python 을 절대 경로로 호출.
+        # PATH 에도 venv bin 을 prepend 해서 mlx_lm.* CLI 도 사용 가능하게.
         safe_prompt = prompt.replace('"', '\\"')
+        py = arguments.get("python") or "$HOME/.local/pipx/venvs/mlx-lm/bin/python"
+        path_export = (
+            "export PATH=$HOME/.local/pipx/venvs/mlx-lm/bin:$HOME/.local/bin:"
+            "/opt/homebrew/bin:/usr/local/bin:$PATH; "
+        )
         if n_hosts <= 1:
             cmd = (
-                f'python3 -m mlx_lm.generate '
+                path_export +
+                f'{py} -m mlx_lm.generate '
                 f'--model "{model}" --prompt "{safe_prompt}" --max-tokens {max_tokens}'
             )
         else:
+            # -x PATH 로 워커 노드에도 PATH 전달 (mpirun Open MPI)
             cmd = (
-                f'mpirun --hostfile $HOME/.mlx-hosts -np {n_hosts} '
-                f'python3 -m mlx_lm.generate '
+                path_export +
+                f'mpirun --hostfile $HOME/.mlx-hosts -np {n_hosts} -x PATH '
+                f'{py} -m mlx_lm.generate '
                 f'--model "{model}" --prompt "{safe_prompt}" --max-tokens {max_tokens}'
             )
         data = await _relay(aid, "shell", {"command": cmd, "timeout": 600}, timeout=610)
